@@ -16,12 +16,20 @@ Porcentaje esperado: el de la regla de la categoría más específica del produc
 compañía de la línea o sin compañía) y, si no hay regla, el del vendedor del pedido
 (order_id.user_id). No llama a _get_commission_percent(), que usa al usuario que confirma.
 Usa las reglas y los porcentajes vigentes al momento de correr el script.
+
+No incluye en el CSV las líneas de anticipo ni las agregadas después de confirmar (creadas
+después de date_order): action_confirm nunca les asignó comisión (hallazgo 5 de INCIDENT.md).
+Solo informa cuántas son.
+
+El CSV se escribe en UTF-8 con BOM para que Excel muestre bien las tildes. Los textos que
+empiezan con =, +, - o @ llevan un apóstrofo delante para que Excel no los tome como fórmulas.
 """
 # pylint: disable=print-used
 # Script de operador para odoo shell: lo que imprime es el informe para quien lo corre.
 import csv
 import os
 from collections import defaultdict
+from datetime import timedelta
 
 from odoo import SUPERUSER_ID, api, fields
 from odoo.tools import float_compare, float_round
@@ -33,6 +41,13 @@ COLUMNAS = [
     "producto", "categoria", "origen_esperado", "porcentaje_guardado", "porcentaje_esperado",
     "comision_guardada", "comision_esperada", "diferencia", "moneda",
 ]
+
+
+def safe_text(value):
+    """Evita que Excel o LibreOffice interpreten un texto como fórmula."""
+    value = value or ""
+    return "'" + value if value[:1] in ("=", "+", "-", "@") else value
+
 
 with env.registry.cursor() as cr:  # noqa: F821 (env lo define odoo shell)
     cr.execute("SET TRANSACTION READ ONLY")
@@ -63,14 +78,18 @@ with env.registry.cursor() as cr:  # noqa: F821 (env lo define odoo shell)
                 rule_cache[key] = best
             return rule_cache[key]
 
+        confirmed_cache = {}
+
         def confirmed_by(order):
-            tracking = ro_env["mail.tracking.value"].search([
-                ("mail_message_id.model", "=", "sale.order"),
-                ("mail_message_id.res_id", "=", order.id),
-                ("field_id.name", "=", "state"),
-                ("new_value_char", "in", list(sale_labels)),
-            ], order="id desc", limit=1)
-            return tracking.mail_message_id.author_id.name or "(sin registro en el chatter)"
+            if order.id not in confirmed_cache:
+                tracking = ro_env["mail.tracking.value"].search([
+                    ("mail_message_id.model", "=", "sale.order"),
+                    ("mail_message_id.res_id", "=", order.id),
+                    ("field_id.name", "=", "state"),
+                    ("new_value_char", "in", list(sale_labels)),
+                ], order="id desc", limit=1)
+                confirmed_cache[order.id] = tracking.mail_message_id.author_id.name or "(sin registro en el chatter)"
+            return confirmed_cache[order.id]
 
         lines = ro_env["sale.order.line"].search([
             ("order_id.state", "=", "sale"),
@@ -80,8 +99,14 @@ with env.registry.cursor() as cr:  # noqa: F821 (env lo define odoo shell)
 
         rows = []
         totals = defaultdict(float)
+        skipped = 0
         for line in lines:
             order = line.order_id
+            # date_order se guarda sin microsegundos: un segundo de margen para las líneas creadas
+            # en el mismo segundo en que se confirmó.
+            if line.is_downpayment or line.create_date > order.date_order + timedelta(seconds=1):
+                skipped += 1
+                continue
             rule = expected_rule(line.product_id.categ_id, line.company_id)
             expected = rule.percent if rule else order.user_id.commission_percent
             if not float_compare(line.commission_percent, expected, precision_digits=2):
@@ -93,13 +118,15 @@ with env.registry.cursor() as cr:  # noqa: F821 (env lo define odoo shell)
             rows.append({
                 "pedido": order.name,
                 "linea_id": line.id,
-                "compania": line.company_id.name,
-                "vendedor": order.user_id.login,
-                "confirmo": confirmed_by(order),
+                "compania": safe_text(line.company_id.name),
+                "vendedor": safe_text(order.user_id.login),
+                "confirmo": safe_text(confirmed_by(order)),
                 "fecha_confirmacion": fields.Datetime.to_string(order.date_order),
-                "producto": line.product_id.display_name,
-                "categoria": line.product_id.categ_id.complete_name,
-                "origen_esperado": "regla: %s" % rule.categ_id.complete_name if rule else "vendedor del pedido",
+                "producto": safe_text(line.product_id.display_name),
+                "categoria": safe_text(line.product_id.categ_id.complete_name),
+                "origen_esperado": safe_text(
+                    "regla: %s" % rule.categ_id.complete_name if rule else "vendedor del pedido"
+                ),
                 "porcentaje_guardado": "%.2f" % line.commission_percent,
                 "porcentaje_esperado": "%.2f" % expected,
                 "comision_guardada": "%.2f" % line.commission_amount,
@@ -108,12 +135,13 @@ with env.registry.cursor() as cr:  # noqa: F821 (env lo define odoo shell)
                 "moneda": line.currency_id.name,
             })
 
-        with open(SALIDA, "w", newline="", encoding="utf-8") as handle:
+        with open(SALIDA, "w", newline="", encoding="utf-8-sig") as handle:
             writer = csv.DictWriter(handle, fieldnames=COLUMNAS)
             writer.writeheader()
             writer.writerows(rows)
 
         print("T200 líneas revisadas: %s" % len(lines))
+        print("T200 anticipos o agregadas después de confirmar (no van al CSV, hallazgo 5): %s" % skipped)
         print("T200 líneas con porcentaje distinto al esperado: %s" % len(rows))
         for currency, total in sorted(totals.items()):
             print("T200 diferencia total %s: %.2f" % (currency, total))

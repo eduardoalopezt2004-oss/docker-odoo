@@ -22,11 +22,16 @@ Para cada fila:
   en el chatter del pedido.
 
 No usa el botón "Recalcular comisiones" (hallazgo 2). Confirma la transacción cada T200_LOTE
-líneas (por defecto 200).
+líneas (por defecto 200). Antes de escribir valida todas las filas; si una tiene un error, no
+corrige nada.
+
+Acepta el CSV tal como lo genera t200_lineas_afectadas.py o como lo guarda Excel en español:
+separador ',' o ';', punto o coma decimal, UTF-8 o cp1252.
 """
 # pylint: disable=print-used
 # Script de operador para odoo shell: lo que imprime es el informe para quien lo corre.
 import csv
+import io
 import os
 
 from odoo.tools import float_compare
@@ -35,21 +40,52 @@ ARCHIVO = os.environ.get("T200_CSV", "/tmp/t200_lineas_afectadas.csv")
 APLICAR = os.environ.get("T200_APLICAR") == "1"
 LOTE = int(os.environ.get("T200_LOTE", "200"))
 
-with open(ARCHIVO, newline="", encoding="utf-8") as handle:
-    rows = list(csv.DictReader(handle))
+
+def read_csv(path):
+    """Lee el CSV tal como lo genera t200_lineas_afectadas.py o como lo guarda Excel en español
+    (separador ';', coma decimal, cp1252)."""
+    with open(path, "rb") as handle:
+        raw = handle.read()
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = raw.decode("cp1252")
+    header = text.splitlines()[0] if text.strip() else ""
+    delimiter = ";" if header.count(";") > header.count(",") else ","
+    return list(csv.DictReader(io.StringIO(text), delimiter=delimiter))
+
+
+def to_percent(value):
+    number = float(value.strip().replace(",", "."))
+    if not 0 <= number <= 100:
+        raise ValueError("%s no está entre 0 y 100" % value)
+    return number
+
+
+# Se valida todo el CSV antes de escribir nada: un error a mitad de camino no deja la corrección
+# aplicada a medias.
+rows, errors = [], []
+for number, row in enumerate(read_csv(ARCHIVO), start=2):
+    try:
+        rows.append((int(row["linea_id"]), to_percent(row["porcentaje_guardado"]),
+                     to_percent(row["porcentaje_esperado"])))
+    except (KeyError, TypeError, AttributeError, ValueError) as exc:
+        errors.append("fila %s: %s" % (number, exc))
+if errors:
+    for error in errors:
+        print("T200 error en el CSV, %s" % error)
+    raise SystemExit("T200 el CSV tiene errores; no se corrigió nada.")
 
 Line = env["sale.order.line"]  # noqa: F821 (env lo define odoo shell)
 result = {"corregida": 0, "ya_corregida": 0, "cambio_desde_el_listado": 0, "no_existe": 0}
 pending = 0
 
-for row in rows:
-    line = Line.browse(int(row["linea_id"])).exists()
+for line_id, stored, expected in rows:
+    line = Line.browse(line_id).exists()
     if not line:
         result["no_existe"] += 1
-        print("T200 línea %s: no existe" % row["linea_id"])
+        print("T200 línea %s: no existe" % line_id)
         continue
-    stored = float(row["porcentaje_guardado"])
-    expected = float(row["porcentaje_esperado"])
     if not float_compare(line.commission_percent, expected, precision_digits=2):
         result["ya_corregida"] += 1
         continue
