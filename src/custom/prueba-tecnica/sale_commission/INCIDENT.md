@@ -148,6 +148,10 @@ Si algo falla: volver a poner el código anterior y reiniciar. Como la base no c
 
 Probado en la base local: `odoo -u sale_commission` sube la versión a `18.0.1.1.1` y el vendedor confirma. `./odoo update prueba-tecnica -d prueba_t200 -m sale_commission` ejecuta ese mismo comando.
 
+## Mensaje al cliente
+
+Buenas tardes. Encontramos la causa: la actualización de las 12:00 m. impedía por error que los vendedores confirmaran pedidos; disculpen las molestias. Ya aplicamos una medida temporal y sus vendedores pueden confirmar con normalidad; la corrección definitiva quedará instalada antes de que abran mañana a las 8:00 a.m. Hasta nuevo aviso, les pedimos que el gerente no confirme pedidos de otros vendedores y que nadie use el botón "Recalcular comisiones". Algunas comisiones de los pedidos que el gerente confirmó esta tarde pueden haber quedado mal; las revisaremos con ustedes antes de corregir nada.
+
 ## Impacto en los datos
 
 Hay dos efectos:
