@@ -110,7 +110,7 @@ Riesgos:
 
 - Mientras exista el permiso, los vendedores pueden ver los porcentajes por categoría.
 - La actualización del módulo no borra el permiso, porque es un registro creado a mano. Si nadie lo borra, la exposición queda para siempre. Por eso borrarlo es un paso del despliegue.
-- Con el permiso, el vendedor también puede usar *Recalcular comisiones*, que aplica reglas distintas (hallazgo 2). Comprobado: en un producto de una subcategoría sin regla propia, la confirmación pone el 8 % de la categoría padre y el botón lo baja a 5 %. Por eso el aviso del paso 4.
+- Con el permiso, el vendedor también puede usar *Recalcular comisiones*, que aplica reglas distintas (hallazgo 2). Comprobado: en un producto de una subcategoría sin regla propia, la confirmación pone el 8 % de la categoría padre y el botón lo baja a 5 %. Por eso el paso 4 pide no usar ese botón.
 
 Comprobado el 2026-10-18 con el código 1.1.0 en `odoo shell`, deshaciendo todo al final: sin el permiso el vendedor recibe `AccessError`, con el permiso confirma con 8 % y, al borrarlo, vuelve el error.
 
@@ -176,7 +176,13 @@ T200_DESDE="2026-10-16 16:00:00" T200_CSV=/tmp/t200_lineas_afectadas.csv \
 
 `T200_DESDE` va en UTC. Supuesto: el cliente está en Venezuela (UTC-4), así que las 12:00 m. del viernes son las 16:00 UTC.
 
-Probado en la base local con dos pedidos de un vendedor (5 %) confirmados por el gerente (4 %) con un producto sin regla, y uno de control con regla. El script lista solo los dos afectados (S00006 y S00008, 2,50 USD de diferencia) e identifica al gerente como quien confirmó S00008. S00006 sale "sin registro en el chatter" porque se creó y confirmó en la misma transacción; en uso normal son dos pasos distintos y el chatter lo registra. En una transacción abierta igual que la del script, un `UPDATE` falla con `cannot execute UPDATE in a read-only transaction`. En una segunda prueba se agregó una línea a un pedido ya confirmado (quedó fuera del CSV y contada aparte) y un producto llamado `=1+1 T-200` (salió como `'=1+1 T-200`).
+Probado en la base local:
+
+- Dos pedidos de un vendedor (5 %) confirmados por el gerente (4 %) con un producto sin regla, y uno de control con regla. El script lista solo los dos afectados (S00006 y S00008, 2,50 USD de diferencia) e identifica al gerente como quien confirmó S00008.
+- S00006 sale "sin registro en el chatter" porque se creó y confirmó en la misma transacción. En uso normal son dos pasos distintos y el chatter lo registra.
+- En una transacción abierta igual que la del script, un `UPDATE` falla con `cannot execute UPDATE in a read-only transaction`.
+- Una línea agregada a un pedido ya confirmado quedó fuera del CSV y contada aparte.
+- Un producto llamado `=1+1 T-200` salió en el CSV como `'=1+1 T-200`.
 
 ### Plan de corrección
 
@@ -186,7 +192,7 @@ No se usa *Recalcular comisiones* para corregir: aplica reglas distintas a las d
 
 1. Respaldo de la base, como en el paso 1 del despliegue.
 2. Correr `scripts/t200_lineas_afectadas.py` con la hora del despliegue de la 1.1.0.
-3. Enviar el CSV al gerente de ventas del cliente. Las comisiones son dinero: él aprueba cada fila o la borra del CSV. Puede abrirlo y guardarlo en Excel: el script de corrección acepta `;` como separador, coma decimal y la codificación de Excel en español.
+3. Enviar el CSV al gerente de ventas del cliente. Como son pagos a los vendedores, él aprueba cada fila o la borra del CSV. Puede abrirlo y guardarlo en Excel: el script de corrección acepta `;` como separador, coma decimal y la codificación de Excel en español.
 4. Simular la corrección con el CSV aprobado. No guarda nada:
 
    ```bash
@@ -232,4 +238,4 @@ Búsqueda del mismo patrón: se revisó cada lugar del módulo que lee `sale.com
 - Prueba: cada acción que usa un vendedor se prueba con `with_user()` y el grupo más bajo que la usa. Las cuatro pruebas de T-200 lo hacen para `action_confirm`. Falta hacerlo para `action_recompute_commissions`, cuando se decida el hallazgo 2.
 - Prueba para el ticket del hallazgo 1: el gerente confirma el pedido de un vendedor con un producto sin regla y la línea debe quedar con el porcentaje del vendedor; lo mismo confirmando como el usuario del portal. Ese ticket también debe quitar `cls.env.user.commission_percent = 5.0` del `setUpClass`. Hoy esa línea sigue ahí porque el hotfix no cambia pruebas existentes, y sin ella las pruebas actuales detectarían el hallazgo 1.
 - Regla de revisión: si un commit crea un modelo con acceso solo para un grupo, el revisor busca dónde se lee ese modelo (`grep -rn "sale.commission.rule"`) y con qué usuario corre ese código.
-- Regla de revisión: si un commit cambia una prueba existente para que siga pasando (quitar `with_user()`, igualar valores en el `setUpClass`), tiene que explicar por qué en el mensaje del commit. Eso es lo que ocultó T-200.
+- Regla de revisión: si un commit cambia una prueba existente para que siga pasando (quitar `with_user()`, igualar valores en el `setUpClass`), tiene que explicar por qué en el mensaje del commit. En `3f4d73f` ese cambio no tenía explicación y ocultó el error.
