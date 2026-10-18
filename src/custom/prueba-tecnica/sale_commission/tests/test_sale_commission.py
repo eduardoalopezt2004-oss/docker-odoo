@@ -1,3 +1,4 @@
+from odoo.exceptions import AccessError
 from odoo.tests import tagged
 from odoo.tests.common import TransactionCase, new_test_user
 
@@ -18,6 +19,11 @@ class TestSaleCommission(TransactionCase):
             name="Otro vendedor",
         )
         cls.other_salesman.commission_percent = 3.0
+        cls.manager = new_test_user(
+            cls.env, login="commission_manager", groups="sales_team.group_sale_manager",
+            name="Gerente de prueba",
+        )
+        cls.manager.commission_percent = 4.0
         cls.partner = cls.env["res.partner"].create({"name": "Cliente de prueba"})
         cls.category = cls.env["product.category"].create({"name": "Repuestos"})
         cls.product = cls.env["product.product"].create({
@@ -64,3 +70,33 @@ class TestSaleCommission(TransactionCase):
         order = self._create_order(self.salesman)
         order.action_confirm()
         self.assertEqual(order.order_line.commission_percent, 10.0)
+
+    # T-200: las pruebas anteriores confirman como superusuario y no detectaron que el vendedor
+    # no podía confirmar. Estas confirman con el usuario real.
+
+    def test_salesman_confirms_order_with_category_rule(self):
+        self.category.commission_percent = 8.0
+        order = self._create_order(self.salesman)
+        order.with_user(self.salesman).action_confirm()
+        self.assertEqual(order.state, "sale")
+        self.assertEqual(order.order_line.commission_percent, 8.0)
+        self.assertAlmostEqual(order.order_line.commission_amount, 16.0)
+
+    def test_salesman_confirms_order_without_rule(self):
+        order = self._create_order(self.salesman)
+        order.with_user(self.salesman).action_confirm()
+        self.assertEqual(order.state, "sale")
+        self.assertEqual(order.order_line.commission_percent, 5.0)
+
+    def test_manager_confirms_order_with_category_rule(self):
+        self.category.commission_percent = 8.0
+        order = self._create_order(self.manager)
+        order.with_user(self.manager).action_confirm()
+        self.assertEqual(order.state, "sale")
+        self.assertEqual(order.order_line.commission_percent, 8.0)
+
+    def test_salesman_cannot_read_rules(self):
+        """La corrección no le abre al vendedor las reglas de comisión."""
+        self.category.commission_percent = 8.0
+        with self.assertRaises(AccessError):
+            self.env["sale.commission.rule"].with_user(self.salesman).search([])
