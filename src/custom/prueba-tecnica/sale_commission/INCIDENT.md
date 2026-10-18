@@ -154,16 +154,20 @@ Buenas tardes. Encontramos la causa: la actualización de las 12:00 m. impedía 
 
 ## Impacto en los datos
 
-Hay dos efectos:
+Hay cuatro efectos:
 
 - Los pedidos que los vendedores intentaron confirmar desde las 12:00 m. siguen como cotización. El error deshizo la transacción, así que no quedaron datos a medias. Hay que confirmarlos después del despliegue.
 - Los pedidos que el gerente confirmó por otros vendedores tienen el porcentaje del gerente en las líneas sin regla de categoría (hallazgo 1).
+- Los pedidos que los clientes aceptaron o pagaron en el portal tienen 0 % en las líneas sin regla (hallazgo 1). El script de detección también los lista.
+- Las líneas agregadas a un pedido después de confirmarlo tienen 0 % (hallazgo 5). El script las cuenta, pero no las incluye en el CSV.
 
 ### Script de solo lectura
 
 `scripts/t200_lineas_afectadas.py` lista las líneas confirmadas desde una fecha cuyo porcentaje no es el esperado. Abre una transacción de solo lectura antes de cualquier consulta, y PostgreSQL rechaza cualquier escritura. Saca un CSV con pedido, línea, vendedor, quién confirmó (según el chatter), porcentaje y comisión guardados y esperados, y la diferencia.
 
 Porcentaje esperado: el de la regla de la categoría más específica y, si no hay, el del vendedor del pedido (`order_id.user_id`). No usa `_get_commission_percent()`, que tiene el error del hallazgo 1. Supuesto: se usan las reglas y porcentajes vigentes al correr el script. Si alguien cambió una regla después del despliegue, esa línea aparece como diferencia y hay que revisarla a mano.
+
+No van al CSV las líneas de anticipo ni las creadas después de confirmar el pedido (hallazgo 5). El CSV se escribe en UTF-8 con BOM para que Excel muestre bien las tildes, y los textos que empiezan con `=`, `+`, `-` o `@` llevan un apóstrofo delante para que Excel no los ejecute como fórmula.
 
 ```bash
 T200_DESDE="2026-10-16 16:00:00" T200_CSV=/tmp/t200_lineas_afectadas.csv \
@@ -172,7 +176,7 @@ T200_DESDE="2026-10-16 16:00:00" T200_CSV=/tmp/t200_lineas_afectadas.csv \
 
 `T200_DESDE` va en UTC. Supuesto: el cliente está en Venezuela (UTC-4), así que las 12:00 m. del viernes son las 16:00 UTC.
 
-Probado en la base local con dos pedidos de un vendedor (5 %) confirmados por el gerente (4 %) con un producto sin regla, y uno de control con regla. El script lista solo los dos afectados (S00006 y S00008, 2,50 USD de diferencia) e identifica al gerente como quien confirmó S00008. S00006 sale "sin registro en el chatter" porque se creó y confirmó en la misma transacción; en uso normal son dos pasos distintos y el chatter lo registra. En una transacción abierta igual que la del script, un `UPDATE` falla con `cannot execute UPDATE in a read-only transaction`.
+Probado en la base local con dos pedidos de un vendedor (5 %) confirmados por el gerente (4 %) con un producto sin regla, y uno de control con regla. El script lista solo los dos afectados (S00006 y S00008, 2,50 USD de diferencia) e identifica al gerente como quien confirmó S00008. S00006 sale "sin registro en el chatter" porque se creó y confirmó en la misma transacción; en uso normal son dos pasos distintos y el chatter lo registra. En una transacción abierta igual que la del script, un `UPDATE` falla con `cannot execute UPDATE in a read-only transaction`. En una segunda prueba se agregó una línea a un pedido ya confirmado (quedó fuera del CSV y contada aparte) y un producto llamado `=1+1 T-200` (salió como `'=1+1 T-200`).
 
 ### Plan de corrección
 
@@ -182,7 +186,7 @@ No se usa *Recalcular comisiones* para corregir: aplica reglas distintas a las d
 
 1. Respaldo de la base, como en el paso 1 del despliegue.
 2. Correr `scripts/t200_lineas_afectadas.py` con la hora del despliegue de la 1.1.0.
-3. Enviar el CSV al gerente de ventas del cliente. Las comisiones son dinero: él aprueba cada fila o la borra del CSV.
+3. Enviar el CSV al gerente de ventas del cliente. Las comisiones son dinero: él aprueba cada fila o la borra del CSV. Puede abrirlo y guardarlo en Excel: el script de corrección acepta `;` como separador, coma decimal y la codificación de Excel en español.
 4. Simular la corrección con el CSV aprobado. No guarda nada:
 
    ```bash
@@ -196,7 +200,7 @@ No se usa *Recalcular comisiones* para corregir: aplica reglas distintas a las d
    T200_APLICAR=1 T200_CSV=/tmp/t200_lineas_afectadas.csv odoo shell -d <base> --no-http < scripts/t200_corregir_lineas.py
    ```
 
-   El script escribe el porcentaje esperado, la comisión se recalcula sola y deja una nota en el chatter de cada pedido. Confirma la transacción cada 200 líneas (`T200_LOTE`).
+   Antes de escribir, el script valida todas las filas; si una tiene un error, no corrige nada y dice en qué fila está. Luego escribe el porcentaje esperado, la comisión se recalcula sola y deja una nota en el chatter de cada pedido. Confirma la transacción cada 200 líneas (`T200_LOTE`).
 6. Verificar: volver a correr el script de solo lectura con la misma fecha. Debe dar 0 líneas. Un pedido corregido tiene la nota "T-200: comisión de la línea ... corregida de ... a ...".
 7. Si hay que deshacer: restaurar el respaldo del paso 1. Por eso conviene correr los pasos 1 a 6 seguidos y fuera del horario de ventas.
 
@@ -208,20 +212,24 @@ Probado en la base local, con respaldo antes y restauración al final:
 - La detección dio 0 líneas.
 - Aplicar otra vez con el mismo CSV no cambió nada (`ya_corregida: 2`) ni duplicó las notas.
 - La restauración del respaldo devolvió las 2 líneas afectadas.
+- En una segunda prueba, con 3 líneas afectadas: un CSV con una fila sin porcentaje no corrigió nada e indicó la fila. El mismo CSV guardado como Excel en español (`;`, coma decimal, cp1252) corrigió las 3 líneas, la detección dio 0 y aplicarlo otra vez no cambió nada.
 
 ## Hallazgos fuera de esta corrección
 
-No entran en el hotfix porque cambian la lógica de cálculo o no son la causa del ticket. Quedan como propuestas. Los cuatro se comprobaron el 2026-10-18 en la base local.
+No entran en el hotfix porque cambian la lógica de cálculo o no son la causa del ticket. Quedan como propuestas. Del 1 al 5 se comprobaron el 2026-10-18 en la base local; el 6 sale de leer el código.
 
-1. El porcentaje de respaldo es el de quien confirma, no el del vendedor del pedido. Hasta la 1.0 salía de `order.user_id.commission_percent`; desde `3f4d73f` sale de `self.env.user.commission_percent`. Si el gerente (4 %) confirma el pedido de un vendedor (5 %) y la categoría no tiene regla, la línea queda con 4 %. Según el ticket, esta tarde el gerente confirmó los pedidos de todos, así que esos pedidos pueden tener la comisión equivocada. Propuesta: en un ticket aparte, volver a `self.order_id.user_id.commission_percent`, con su prueba, y revisar los pedidos confirmados desde las 12:00 m.
+1. El porcentaje de respaldo es el de quien confirma, no el del vendedor del pedido. Hasta la 1.0 salía de `order.user_id.commission_percent`; desde `3f4d73f` sale de `self.env.user.commission_percent`. Si el gerente (4 %) confirma el pedido de un vendedor (5 %) y la categoría no tiene regla, la línea queda con 4 %. Según el ticket, esta tarde el gerente confirmó los pedidos de todos, así que esos pedidos pueden tener la comisión equivocada. Pasa lo mismo cuando el cliente acepta la cotización en el portal o la paga en línea: Odoo confirma con el usuario del portal o el público (`portal_quote_accept` → `_validate_order()` → `action_confirm()`), y las líneas sin regla quedan con 0 %. Propuesta: en un ticket aparte, volver a `self.order_id.user_id.commission_percent`, con su prueba, y revisar los pedidos confirmados desde las 12:00 m.
 2. El botón *Recalcular comisiones* también falla para el vendedor con el mismo `AccessError`, porque busca en el mismo modelo. Además aplica reglas distintas a las de la confirmación: solo compara la categoría exacta (sin categorías padre) y no filtra por compañía. Propuesta: decidir si el vendedor debe poder recalcular. Si no, mostrar el botón solo al gerente y comprobar el grupo dentro del método. En los dos casos, que use `_get_commission_percent()`.
 3. Cualquier usuario interno puede leer el porcentaje de comisión de los demás. El campo `res.users.commission_percent` no tiene `groups=`; un vendedor lee el porcentaje del gerente. Viene de la versión 1.0. Propuesta: limitar el campo al grupo del gerente, comprobando antes que el cálculo no lo lea con el usuario del vendedor.
 4. Las columnas *Comisión* y *Comisión (%)* no aparecen en las líneas del pedido. La vista usa `//field[@name='order_line']//field[@name='price_subtotal']`, y en Odoo 18 el primer `price_subtotal` dentro de `order_line` es el campo invisible del formulario de la línea, no el de la lista. Los dos campos quedan en ese formulario. Viene de la versión 1.0. Propuesta: anclar el xpath a la lista, `//field[@name='order_line']/list//field[@name='price_subtotal']`.
+5. Una línea que se agrega a un pedido ya confirmado queda sin comisión (0 %). `action_confirm` es el único lugar que fija el porcentaje. En la 1.0 el porcentaje era un campo calculado y la línea nueva tomaba el del vendedor, así que también es una regresión de `3f4d73f`. El script de detección no incluye estas líneas en el CSV, ni las de anticipo, porque no está decidido si deben llevar comisión; solo informa cuántas hay. Propuesta: que el cliente decida si las líneas agregadas después (envíos, ajustes) llevan comisión y, si es así, fijar el porcentaje al crearlas en un pedido confirmado.
+6. Si una regla sin compañía y una regla de la compañía tienen la misma categoría, gana la de menor id y no la de la compañía: el orden solo mira la profundidad de la categoría. El script de detección usa el mismo criterio que la confirmación, así que no marca esas líneas. Propuesta: preferir la regla de la compañía en el desempate.
 
 Búsqueda del mismo patrón: se revisó cada lugar del módulo que lee `sale.commission.rule` con el usuario actual. Son `_get_commission_percent()` (la causa de T-200), `action_recompute_commissions()` (hallazgo 2) y el campo *Comisión (%)* de la categoría. Este último no falla, porque tiene `groups="sales_team.group_sale_manager"` y solo lo calcula el gerente. También se revisó qué lee el vendedor al confirmar: `res.users.commission_percent` no falla, pero lo expone (hallazgo 3).
 
 ## Prevención
 
 - Prueba: cada acción que usa un vendedor se prueba con `with_user()` y el grupo más bajo que la usa. Las cuatro pruebas de T-200 lo hacen para `action_confirm`. Falta hacerlo para `action_recompute_commissions`, cuando se decida el hallazgo 2.
+- Prueba para el ticket del hallazgo 1: el gerente confirma el pedido de un vendedor con un producto sin regla y la línea debe quedar con el porcentaje del vendedor; lo mismo confirmando como el usuario del portal. Ese ticket también debe quitar `cls.env.user.commission_percent = 5.0` del `setUpClass`. Hoy esa línea sigue ahí porque el hotfix no cambia pruebas existentes, y sin ella las pruebas actuales detectarían el hallazgo 1.
 - Regla de revisión: si un commit crea un modelo con acceso solo para un grupo, el revisor busca dónde se lee ese modelo (`grep -rn "sale.commission.rule"`) y con qué usuario corre ese código.
 - Regla de revisión: si un commit cambia una prueba existente para que siga pasando (quitar `with_user()`, igualar valores en el `setUpClass`), tiene que explicar por qué en el mensaje del commit. Eso es lo que ocultó T-200.

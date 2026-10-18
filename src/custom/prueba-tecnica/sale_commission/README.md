@@ -49,7 +49,10 @@ Supuestos:
 
 Limitaciones conocidas (hallazgos de `INCIDENT.md`, fuera del hotfix):
 
-1. Si alguien confirma el pedido de otro vendedor, las líneas sin regla toman el porcentaje de quien confirma.
+1. Las líneas sin regla toman el porcentaje de quien confirma, no el del vendedor del pedido: el del gerente si él
+   confirma por otro, y 0 % si el cliente acepta o paga la cotización en el portal.
 2. *Recalcular comisiones* falla para el vendedor y aplica reglas distintas a las de la confirmación.
 3. Cualquier usuario interno puede leer el porcentaje de comisión de los demás.
 4. Las columnas de comisión no aparecen en la lista de líneas del pedido.
+5. Las líneas agregadas a un pedido ya confirmado quedan sin comisión.
+6. Si hay una regla sin compañía y otra de la compañía para la misma categoría, no se prefiere la de la compañía.
