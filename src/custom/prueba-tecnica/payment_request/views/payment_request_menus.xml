@@ -10,4 +10,16 @@
               parent="payment_request_menu_root"
               action="payment_request_action"
               sequence="10"/>
+
+    <menuitem id="payment_request_menu_config"
+              name="Configuración"
+              parent="payment_request_menu_root"
+              groups="base.group_system"
+              sequence="90"/>
+
+    <menuitem id="payment_approval_level_menu"
+              name="Niveles de aprobación"
+              parent="payment_request_menu_config"
+              action="payment_approval_level_action"
+              sequence="10"/>
 </odoo>

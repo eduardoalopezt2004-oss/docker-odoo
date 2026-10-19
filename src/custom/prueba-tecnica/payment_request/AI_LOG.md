@@ -9,6 +9,9 @@
   - Revisión obligatoria de cada tramo contra los criterios del enunciado antes de cerrarlo.
   - Condición de cierre: pruebas en base nueva, linter del repositorio y mi verificación en el
     navegador antes de cada push.
+  - En el tramo B usé créditos de Claude Code en la nube para el trabajo más pesado (escribir el
+    código y las pruebas), para optimizar tiempo y créditos. Después lo probé y ajusté en el
+    entorno local.
 
 Delegué en la IA la redacción de código, pruebas y documentos, dentro de esas reglas. Mi trabajo
 fue definir el método, revisar y aprobar cada propuesta, decidir los supuestos y verificar el
@@ -37,3 +40,37 @@ Partes donde preferí no delegar:
 - Las preguntas a Carolina y los supuestos para avanzar sin su respuesta.
 - Las decisiones de control del tramo A: Tesorería separada de Aprobador, porque quien paga no aprueba; bloquear la auto-aprobación desde el tramo A, y que una solicitud rechazada no vuelva atrás.
 - La verificación en el navegador con un usuario por grupo, hasta la aprobación.
+
+---
+
+# Tramo B — niveles de aprobación, rechazo con motivo, pago y reporte
+
+## Prompts clave (tramo B)
+
+1. "¿Podemos avanzar con el tramo B con lo que ya está en el repositorio y el enunciado?"
+   - La IA revisó el estado del módulo y propuso un diseño apoyado en los supuestos del README del tramo A (un solo aprobador por nivel de monto, el aprobador no sale del jefe del empleado, pago suelto sin cruzar con factura). Dejó tres puntos abiertos para que yo decidiera.
+2. "Sí a que el envío falle si el aprobador es quien pidió el pago; la pregunta del monto sin nivel, desarróllala."
+   - Desarrolló el caso de un monto que ningún nivel cubre con tres opciones y sus riesgos.
+3. "Sí, la opción 1." Con eso arrancó: primero las pruebas, después el código en commits separados y al final README y AI_LOG.
+
+## Qué decidí yo (tramo B)
+
+- **Sin nivel para el monto, el envío se bloquea** con un mensaje claro, en lugar de enviar sin aprobador o de tener un aprobador por defecto. Evita justo lo que el cliente quiere evitar: una solicitud enviada que nadie aprueba.
+- **Si el aprobador del nivel es quien pidió el pago, el envío falla** y no se reasigna en silencio.
+
+## Lo que la IA hizo mal (tramo B)
+
+- Al ajustar las pruebas del tramo A (que ahora necesitan un nivel antes de enviar), en la prueba de «un aprobador no aprueba su propia solicitud» intentó llegar al estado enviado con `sudo().write`, que ya no es posible porque el envío falla. Lo vio al releer la prueba antes del commit y la cambió por una escritura SQL, para conservar la defensa en profundidad del tramo A.
+- Al pedirle que comprobara todo lo hecho, releyó el código contra las pruebas y los permisos y encontró errores que había entregado como terminados:
+  - El botón «Pago» y el PDF leían el `account.payment` con los permisos del usuario. Tesorería y el solicitante no tienen permisos de Contabilidad, así que imprimir una solicitud pagada habría dado error de acceso. Se agregaron el número y la fecha del pago como campos relacionados, y el botón quedó solo para quien tiene Contabilidad.
+  - Tesorería no tenía garantizado leer los diarios contables, y sin eso no puede elegir el diario en el asistente. Se le dio solo lectura sobre `account.journal`.
+  - El motivo del rechazo se publicaba como nota interna, que no avisa al solicitante. Ahora es un mensaje dirigido a él.
+  - Cuatro pruebas habrían fallado con el código correcto: buscaba la palabra «aprobador» en un mensaje que no la tiene; leía el pago con el usuario solicitante; exigía un asiento publicado, cuando en Odoo 18 un pago puede publicarse sin asiento; y probaba un motivo vacío sin savepoint, lo que podía romper la transacción.
+  - El README decía que el pago muestra un campo «Solicitud de pago» en su formulario, pero no hay vista que lo muestre. Se corrigió el texto.
+
+- Las pruebas creaban usuarios sin correo. Al correrlas en una base nueva dieron 37 errores con la misma causa: Odoo no puede notificar la actividad del aprobador si quien envía no tiene correo. Lo vi en la primera corrida y se corrigió dándoles un correo de ejemplo.
+
+## Cómo lo verifiqué
+
+- Corrí las pruebas en una base nueva de Odoo 18 con `account` instalado: 47 pruebas del módulo, sin fallos ni errores después de la corrección. Eso confirmó el uso de `account.payment`, `_convert`, `activity_schedule` y el reporte.
+- Pruebas en el navegador automatizadas por la IA, con un usuario por grupo: envío con aprobador asignado y su actividad, rechazo con motivo en el chatter, pago con diario y PDF con quién aprobó y cuándo. Después las revisé en el navegador para confirmar.

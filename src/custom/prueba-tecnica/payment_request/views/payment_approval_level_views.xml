@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="payment_approval_level_view_list" model="ir.ui.view">
+        <field name="name">payment.approval.level.list</field>
+        <field name="model">payment.approval.level</field>
+        <field name="arch" type="xml">
+            <list string="Niveles de aprobación" editable="bottom">
+                <field name="name"/>
+                <field name="min_amount"/>
+                <field name="currency_id" column_invisible="1"/>
+                <field name="approver_id" widget="many2one_avatar_user"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="payment_approval_level_view_form" model="ir.ui.view">
+        <field name="name">payment.approval.level.form</field>
+        <field name="model">payment.approval.level</field>
+        <field name="arch" type="xml">
+            <form string="Nivel de aprobación">
+                <sheet>
+                    <group>
+                        <field name="name"/>
+                        <field name="min_amount"/>
+                        <field name="currency_id" invisible="1"/>
+                        <field name="approver_id" widget="many2one_avatar_user"/>
+                        <field name="company_id" groups="base.group_multi_company"/>
+                    </group>
+                    <p class="text-muted">
+                        La solicitud la aprueba el aprobador del nivel con el mayor monto mínimo que no supere
+                        su monto. El monto se compara en la moneda de la compañía.
+                    </p>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="payment_approval_level_action" model="ir.actions.act_window">
+        <field name="name">Niveles de aprobación</field>
+        <field name="res_model">payment.approval.level</field>
+        <field name="view_mode">list,form</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">Crea el primer nivel de aprobación</p>
+            <p>Sin niveles no se pueden enviar solicitudes. Crea uno con monto mínimo 0 para los pagos normales.</p>
+        </field>
+    </record>
+
+    <record id="payment_request_reject_wizard_view_form" model="ir.ui.view">
+        <field name="name">payment.request.reject.wizard.form</field>
+        <field name="model">payment.request.reject.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Rechazar solicitud">
+                <group>
+                    <field name="request_id" readonly="1"/>
+                    <field name="reason" placeholder="Explica por qué se rechaza: el solicitante lo verá."/>
+                </group>
+                <footer>
+                    <button name="action_confirm" type="object" string="Rechazar" class="btn-primary"/>
+                    <button string="Cancelar" special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+
+    <record id="payment_request_pay_wizard_view_form" model="ir.ui.view">
+        <field name="name">payment.request.pay.wizard.form</field>
+        <field name="model">payment.request.pay.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Pagar solicitud">
+                <group>
+                    <group>
+                        <field name="request_id" readonly="1"/>
+                        <field name="partner_id"/>
+                        <field name="amount"/>
+                        <field name="currency_id" invisible="1"/>
+                        <field name="company_id" invisible="1"/>
+                    </group>
+                    <group>
+                        <field name="journal_id" options="{'no_create': True}"/>
+                        <field name="payment_date"/>
+                    </group>
+                </group>
+                <footer>
+                    <button name="action_confirm" type="object" string="Registrar pago" class="btn-primary"/>
+                    <button string="Cancelar" special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+</odoo>

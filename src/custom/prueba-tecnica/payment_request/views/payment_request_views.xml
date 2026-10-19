@@ -9,6 +9,7 @@
                 <field name="date"/>
                 <field name="partner_id"/>
                 <field name="requester_id" widget="many2one_avatar_user"/>
+                <field name="approver_id" widget="many2one_avatar_user" optional="show"/>
                 <field name="concept"/>
                 <field name="amount"/>
                 <field name="currency_id" column_invisible="1"/>
@@ -31,16 +32,28 @@
                             invisible="state != 'draft' or requester_id != uid"/>
                     <button name="action_approve" type="object" string="Aprobar" class="btn-primary"
                             groups="payment_request.group_payment_approver"
-                            invisible="state != 'submitted' or requester_id == uid"/>
+                            invisible="state != 'submitted' or approver_id != uid"/>
                     <button name="action_reject" type="object" string="Rechazar"
                             groups="payment_request.group_payment_approver"
-                            invisible="state != 'submitted'"/>
+                            invisible="state != 'submitted' or approver_id != uid"/>
                     <button name="action_mark_paid" type="object" string="Marcar como pagada" class="btn-primary"
                             groups="payment_request.group_payment_treasury"
                             invisible="state != 'approved'"/>
+                    <button name="%(payment_request.action_report_payment_request)d" type="action" string="Imprimir"
+                            invisible="state not in ('approved', 'paid')"/>
                     <field name="state" widget="statusbar" statusbar_visible="draft,submitted,approved,paid"/>
                 </header>
                 <sheet>
+                    <div class="oe_button_box" name="button_box">
+                        <!-- Abrir el pago pide permisos de Contabilidad; el número se ve en el formulario igual. -->
+                        <button name="action_view_payment" type="object" class="oe_stat_button" icon="fa-money"
+                                groups="account.group_account_invoice,account.group_account_readonly"
+                                invisible="not payment_id">
+                            <div class="o_stat_info">
+                                <span class="o_stat_text">Pago</span>
+                            </div>
+                        </button>
+                    </div>
                     <div class="oe_title">
                         <h1><field name="name" readonly="1"/></h1>
                     </div>
@@ -49,12 +62,21 @@
                             <field name="partner_id" readonly="state != 'draft'"/>
                             <field name="concept" readonly="state != 'draft'"/>
                             <field name="requester_id" widget="many2one_avatar_user" readonly="1"/>
+                            <field name="approver_id" widget="many2one_avatar_user"
+                                   invisible="state == 'draft'"/>
                         </group>
                         <group>
                             <field name="amount" readonly="state != 'draft'"/>
                             <field name="currency_id" readonly="state != 'draft'" options="{'no_create': True}"/>
                             <field name="date" readonly="state != 'draft'"/>
+                            <field name="approval_date" invisible="not approval_date"/>
+                            <field name="payment_id" invisible="1"/>
+                            <field name="payment_name" invisible="not payment_id"/>
+                            <field name="payment_date" invisible="not payment_id"/>
                         </group>
+                    </group>
+                    <group invisible="state != 'rejected'">
+                        <field name="reject_reason"/>
                     </group>
                 </sheet>
                 <chatter/>
@@ -72,6 +94,8 @@
                 <field name="requester_id"/>
                 <field name="concept"/>
                 <filter name="my_requests" string="Mis solicitudes" domain="[('requester_id', '=', uid)]"/>
+                <filter name="to_approve" string="Por aprobar por mí"
+                        domain="[('approver_id', '=', uid), ('state', '=', 'submitted')]"/>
                 <separator/>
                 <filter name="draft" string="Borrador" domain="[('state', '=', 'draft')]"/>
                 <filter name="submitted" string="Enviadas" domain="[('state', '=', 'submitted')]"/>
@@ -82,6 +106,7 @@
                     <filter name="group_partner" string="Proveedor" context="{'group_by': 'partner_id'}"/>
                     <filter name="group_state" string="Estado" context="{'group_by': 'state'}"/>
                     <filter name="group_requester" string="Solicitante" context="{'group_by': 'requester_id'}"/>
+                    <filter name="group_approver" string="Aprobador" context="{'group_by': 'approver_id'}"/>
                 </group>
             </search>
         </field>

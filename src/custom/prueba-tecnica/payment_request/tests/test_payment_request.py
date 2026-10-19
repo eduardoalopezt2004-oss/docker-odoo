@@ -21,14 +21,43 @@ class TestPaymentRequest(TransactionCase):
         cls.treasurer = cls._create_user(
             "tesoreria_test", group_user | cls.env.ref("payment_request.group_payment_treasury")
         )
+        # Desde el tramo B el aprobador sale del nivel que corresponde al monto: un nivel general.
+        cls.env["payment.approval.level"].create(
+            {"name": "General", "min_amount": 0.0, "approver_id": cls.approver.id}
+        )
+        cls.journal = cls._bank_journal()
 
     @classmethod
     def _create_user(cls, login, groups):
         return (
             cls.env["res.users"]
             .with_context(no_reset_password=True)
-            .create({"name": login, "login": login, "groups_id": [Command.set(groups.ids)]})
+            .create({"name": login, "login": login, "email": f"{login}@example.com", "groups_id": [Command.set(groups.ids)]})
         )
+
+    @classmethod
+    def _bank_journal(cls):
+        company = cls.env.company
+        journal = cls.env["account.journal"].search([("type", "=", "bank"), ("company_id", "=", company.id)], limit=1)
+        return journal or cls.env["account.journal"].create(
+            {"name": "Banco de prueba", "type": "bank", "code": "PRBK", "company_id": company.id}
+        )
+
+    def _pay(self, request, user=None):
+        wizard = (
+            self.env["payment.request.pay.wizard"]
+            .with_user(user or self.treasurer)
+            .create({"request_id": request.id, "journal_id": self.journal.id})
+        )
+        return wizard.action_confirm()
+
+    def _reject(self, request, user=None, reason="Falta la factura"):
+        wizard = (
+            self.env["payment.request.reject.wizard"]
+            .with_user(user or self.approver)
+            .create({"request_id": request.id, "reason": reason})
+        )
+        return wizard.action_confirm()
 
     def _new_request(self, user=None, **vals):
         values = {"partner_id": self.partner.id, "amount": 150.0, "concept": "Compra de repuestos"}
@@ -103,7 +132,7 @@ class TestPaymentRequest(TransactionCase):
         self.assertEqual(request.state, "submitted")
         request.with_user(self.approver).action_approve()
         self.assertEqual(request.state, "approved")
-        request.with_user(self.treasurer).action_mark_paid()
+        self._pay(request)
         self.assertEqual(request.state, "paid")
 
     def test_state_changes_logged_in_chatter(self):
@@ -112,7 +141,7 @@ class TestPaymentRequest(TransactionCase):
         steps = [
             (request.action_submit, self.requester),
             (request.with_user(self.approver).action_approve, self.approver),
-            (request.with_user(self.treasurer).action_mark_paid, self.treasurer),
+            (lambda: self._pay(request), self.treasurer),
         ]
         for action, user in steps:
             action()
@@ -125,7 +154,7 @@ class TestPaymentRequest(TransactionCase):
 
     def test_rejected_is_final(self):
         request = self._submitted_request()
-        request.with_user(self.approver).action_reject()
+        self._reject(request)
         self.assertEqual(request.state, "rejected")
         with self.assertRaises(UserError):
             request.action_submit()
@@ -147,7 +176,7 @@ class TestPaymentRequest(TransactionCase):
         request.with_user(self.approver).action_approve()
         with self.assertRaises(UserError):
             request.with_user(self.approver).action_approve()
-        request.with_user(self.treasurer).action_mark_paid()
+        self._pay(request)
         with self.assertRaises(UserError):
             request.with_user(self.treasurer).action_mark_paid()
         self.assertEqual(request.state, "paid")
@@ -183,7 +212,18 @@ class TestPaymentRequest(TransactionCase):
         self.assertEqual(request.state, "submitted")
 
     def test_approver_cannot_approve_own_request(self):
-        request = self._submitted_request(self.approver)
+        # El envío ya falla si el aprobador del nivel es quien pidió el pago...
+        request = self._new_request(self.approver)
+        with self.assertRaises(UserError):
+            request.action_submit()
+        self.assertEqual(request.state, "draft")
+        # ...y aunque la solicitud llegara a enviada por otro camino (aquí, por SQL), no la aprueba.
+        self.env.flush_all()
+        self.env.cr.execute(
+            "UPDATE payment_request SET state = 'submitted', approver_id = %s WHERE id = %s",
+            (self.approver.id, request.id),
+        )
+        self.env.invalidate_all()
         with self.assertRaises(UserError):
             request.action_approve()
         self.assertEqual(request.state, "submitted")
@@ -227,16 +267,26 @@ class TestPaymentRequest(TransactionCase):
 
     def _form_buttons(self, user):
         arch = self.env["payment.request"].with_user(user).get_views([(False, "form")])["views"]["form"]["arch"]
-        return {button.get("name"): button.get("invisible") for button in etree.fromstring(arch).iter("button")}
+        # Solo los botones de método: el de imprimir es una acción de informe.
+        return {
+            button.get("name"): button.get("invisible")
+            for button in etree.fromstring(arch).iter("button")
+            if button.get("type") == "object"
+        }
 
     def test_buttons_by_group_and_state(self):
         submit = "state != 'draft' or requester_id != uid"
-        approve = "state != 'submitted' or requester_id == uid"
-        reject = "state != 'submitted'"
+        approve = "state != 'submitted' or approver_id != uid"
+        reject = "state != 'submitted' or approver_id != uid"
         pay = "state != 'approved'"
+        # Ninguno de estos usuarios tiene permisos de Contabilidad: no ven el botón para abrir el pago.
         self.assertEqual(self._form_buttons(self.requester), {"action_submit": submit})
         self.assertEqual(
             self._form_buttons(self.approver),
             {"action_submit": submit, "action_approve": approve, "action_reject": reject},
         )
         self.assertEqual(self._form_buttons(self.treasurer), {"action_submit": submit, "action_mark_paid": pay})
+        accountant = self._create_user(
+            "contabilidad_test", self.env.ref("base.group_user") | self.env.ref("account.group_account_invoice")
+        )
+        self.assertEqual(self._form_buttons(accountant).get("action_view_payment"), "not payment_id")

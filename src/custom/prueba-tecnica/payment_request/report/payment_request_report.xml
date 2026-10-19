@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="action_report_payment_request" model="ir.actions.report">
+        <field name="name">Solicitud de pago</field>
+        <field name="model">payment.request</field>
+        <field name="report_type">qweb-pdf</field>
+        <field name="report_name">payment_request.report_payment_request</field>
+        <field name="report_file">payment_request.report_payment_request</field>
+        <field name="print_report_name">'Solicitud de pago - %s' % object.name.replace('/', '-')</field>
+    </record>
+
+    <template id="report_payment_request">
+        <t t-call="web.html_container">
+            <t t-foreach="docs" t-as="doc">
+                <t t-call="web.external_layout">
+                    <div class="page">
+                        <h2>Solicitud de pago <span t-field="doc.name"/></h2>
+                        <table class="table table-sm mt-4">
+                            <tbody>
+                                <tr>
+                                    <th class="w-25">Fecha</th>
+                                    <td><span t-field="doc.date"/></td>
+                                </tr>
+                                <tr>
+                                    <th>Proveedor</th>
+                                    <td><span t-field="doc.partner_id"/></td>
+                                </tr>
+                                <tr>
+                                    <th>Concepto</th>
+                                    <td><span t-field="doc.concept"/></td>
+                                </tr>
+                                <tr>
+                                    <th>Monto</th>
+                                    <td><span t-field="doc.amount" t-options="{'widget': 'monetary', 'display_currency': doc.currency_id}"/></td>
+                                </tr>
+                                <tr>
+                                    <th>Solicitante</th>
+                                    <td><span t-field="doc.requester_id"/></td>
+                                </tr>
+                                <tr>
+                                    <th>Estado</th>
+                                    <td><span t-field="doc.state"/></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                        <p t-if="doc.approver_id and doc.approval_date" class="mt-4">
+                            Aprobada por <strong t-field="doc.approver_id"/>
+                            el <span t-field="doc.approval_date"/>.
+                        </p>
+                        <p t-if="doc.payment_name">
+                            Pago registrado: <span t-field="doc.payment_name"/>
+                            (<span t-field="doc.payment_date"/>).
+                        </p>
+                    </div>
+                </t>
+            </t>
+        </t>
+    </template>
+</odoo>
