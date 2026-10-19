@@ -2,7 +2,7 @@ from datetime import timedelta
 
 from odoo import fields
 from odoo.exceptions import AccessError, UserError, ValidationError
-from odoo.tests.common import Form, TransactionCase, tagged
+from odoo.tests import Form, TransactionCase, tagged
 
 
 @tagged("post_install", "-at_install")
@@ -35,9 +35,9 @@ class TestFleetInspection(TransactionCase):
         items = self.env["fleet.inspection.item"].search([])
         self.assertEqual(inspection.line_ids.mapped("item_id"), items)
 
-    def test_name_get_includes_plate(self):
+    def test_display_name_includes_plate(self):
         inspection = self._new_inspection()
-        self.assertIn("AB123CD", inspection.name_get()[0][1])
+        self.assertIn("AB123CD", inspection.display_name)
 
     def test_full_flow_approved(self):
         inspection = self._new_inspection()
