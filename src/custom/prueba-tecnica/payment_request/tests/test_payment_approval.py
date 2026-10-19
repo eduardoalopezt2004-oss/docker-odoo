@@ -393,3 +393,17 @@ class TestPaymentApproval(TransactionCase):
         ):
             with self.subTest(model=model, view_type=view_type):
                 self.assertTrue(View.search([("model", "=", model), ("type", "=", view_type)]))
+
+    def test_submit_without_email_has_clear_message(self):
+        self.requester.sudo().email = False
+        request = self._new_request()
+        with self.assertRaisesRegex(UserError, "necesitas un correo"):
+            request.with_user(self.requester).action_submit()
+        self.assertEqual(request.state, "draft")
+
+    def test_reject_without_email_has_clear_message(self):
+        request = self._submitted()
+        request.approver_id.sudo().email = False
+        with self.assertRaisesRegex(UserError, "necesitas un correo"):
+            request.with_user(request.approver_id).action_reject()
+        self.assertEqual(request.state, "submitted")
