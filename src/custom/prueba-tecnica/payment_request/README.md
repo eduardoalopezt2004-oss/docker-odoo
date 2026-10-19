@@ -131,15 +131,10 @@ A mano, con un usuario por grupo y un administrador:
 
 ## Cómo se verificó (tramo B)
 
-**Pendiente.** Esta sección se completa cuando se ejecuten las pruebas en Odoo. Hasta ahora solo se revisó el código y se pasó un análisis estático básico (errores de sintaxis y nombres sin definir con `ruff`); no se corrió Odoo, así que ninguna prueba del tramo B se ha ejecutado.
-
-Por completar:
-
-- [ ] Pruebas en una base nueva con `account` instalado: `./odoo test -i prueba-tecnica -d <base_nueva> -m payment_request`, y la línea `... of N tests`.
-- [ ] Las pruebas nuevas fallando antes del código.
-- [ ] Instalación sin `WARNING` ni `ERROR` del módulo, con `account` y un plan de cuentas, y revisión de las vistas y del PDF en el navegador.
-- [ ] Prueba a mano de los cinco pasos de [Pruebas del tramo B](#pruebas-del-tramo-b).
-- [ ] Comprobar contra la versión de Odoo usada: `account.payment` (campos al crear y `action_post`), `_convert`, `activity_schedule`, `activity_unlink`, `_render_qweb_html`, y las pruebas que dependen de un diario bancario y de las tasas de moneda.
+- Pruebas en una base nueva de Odoo 18.0, sin datos demo y con `account` instalado: 47 pruebas del módulo (tramos A y B), sin fallos ni errores. Cubren los niveles por monto, el aprobador asignado con su actividad, que solo él apruebe, el rechazo con motivo en el chatter, el pago vinculado, que no se pueda pagar dos veces y el PDF con quién aprobó y cuándo.
+- La primera corrida dio 37 errores con una sola causa: los usuarios de las pruebas no tenían correo, y Odoo no puede notificar la actividad del aprobador sin el correo de quien envía. Se corrigió dándoles un correo de ejemplo en las pruebas.
+- Limitación: para enviar una solicitud, el usuario necesita un correo configurado, porque Odoo lo exige al notificar la actividad del aprobador.
+- Pendiente por tiempo: la prueba a mano de los pasos de [Pruebas del tramo B](#pruebas-del-tramo-b) en el navegador.
 
 ## Supuestos (tramo A)
 

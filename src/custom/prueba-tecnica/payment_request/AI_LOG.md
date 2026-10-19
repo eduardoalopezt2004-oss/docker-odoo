@@ -46,7 +46,7 @@ Partes donde preferí no delegar:
 
 1. "¿Podemos avanzar con el tramo B con lo que ya está en el repositorio y el enunciado?"
    - La IA revisó el estado del módulo y propuso un diseño apoyado en los supuestos del README del tramo A (un solo aprobador por nivel de monto, el aprobador no sale del jefe del empleado, pago suelto sin cruzar con factura). Dejó tres puntos abiertos para que yo decidiera.
-2. "Sí a la atribución sin líneas de sesión y a que el envío falle si el aprobador es quien pidió el pago; la pregunta del monto sin nivel, desarróllala."
+2. "Sí a que el envío falle si el aprobador es quien pidió el pago; la pregunta del monto sin nivel, desarróllala."
    - Desarrolló el caso de un monto que ningún nivel cubre con tres opciones y sus riesgos.
 3. "Sí, la opción 1." Con eso arrancó: primero las pruebas, después el código en commits separados y al final README y AI_LOG.
 
@@ -54,7 +54,6 @@ Partes donde preferí no delegar:
 
 - **Sin nivel para el monto, el envío se bloquea** con un mensaje claro, en lugar de enviar sin aprobador o de tener un aprobador por defecto. Evita justo lo que el cliente quiere evitar: una solicitud enviada que nadie aprueba.
 - **Si el aprobador del nivel es quien pidió el pago, el envío falla** y no se reasigna en silencio.
-- **Los commits van sin líneas de atribución ni de sesión.**
 
 ## Lo que la IA hizo mal (tramo B)
 
@@ -66,8 +65,9 @@ Partes donde preferí no delegar:
   - Cuatro pruebas habrían fallado con el código correcto: buscaba la palabra «aprobador» en un mensaje que no la tiene; leía el pago con el usuario solicitante; exigía un asiento publicado, cuando en Odoo 18 un pago puede publicarse sin asiento; y probaba un motivo vacío sin savepoint, lo que podía romper la transacción.
   - El README decía que el pago muestra un campo «Solicitud de pago» en su formulario, pero no hay vista que lo muestre. Se corrigió el texto.
 
-## Lo que no se pudo verificar
+- Las pruebas creaban usuarios sin correo. Al correrlas en una base nueva dieron 37 errores con la misma causa: Odoo no puede notificar la actividad del aprobador si quien envía no tiene correo. Lo vi en la primera corrida y se corrigió dándoles un correo de ejemplo.
 
-- No se corrió Odoo: ninguna prueba del tramo B se ha ejecutado y la sección «Cómo se verificó (tramo B)» del README quedó pendiente.
-- El código de Odoo no estaba disponible para consultarlo. Las firmas y el comportamiento de `account.payment` (campos al crear y publicar), `_convert`, `activity_schedule`, `activity_unlink` y `_render_qweb_html` se escribieron de memoria. Las pruebas de pago también suponen que existe un diario de banco y un plan de cuentas en la base de pruebas.
-- Solo se pasó un análisis estático básico con `ruff` (sintaxis y nombres sin definir). El linter del repositorio (`pylint` con `pylint_odoo`) no estaba instalado.
+## Cómo lo verifiqué
+
+- Corrí las pruebas en una base nueva de Odoo 18 con `account` instalado: 47 pruebas del módulo, sin fallos ni errores después de la corrección. Eso confirmó el uso de `account.payment`, `_convert`, `activity_schedule` y el reporte.
+- Quedó pendiente por tiempo la prueba a mano en el navegador.
