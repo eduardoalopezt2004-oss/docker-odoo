@@ -146,7 +146,7 @@ A mano, en la base local `sia_navegador` (solo local, no se entrega). Usuarios: 
 | 11 | TIENDA-001 | Escritorio | Muebles | 8 | |
 | 12 | TIENDA-002 | Silla | Muebles / Sillas | 3 | Subcategoría |
 | 13 | TIENDA-003 | Lámpara | Muebles | 0 | Sin stock |
-| 14 | TIENDA-004 | Mesa | Muebles | 0 | 2 a mano, las 2 reservadas |
+| 14 | TIENDA-004 | Mesa | Muebles | 0 | 2 a mano, las 2 reservadas por la entrega WH/OUT/00001 |
 | 15 | | Instalación | Muebles | 0 | Servicio, sin referencia |
 | 16 | TIENDA-005 | Estante | Otros | 4 | |
 | 17 | TIENDA-006 | Insumo interno | Muebles | 5 | No se puede vender: no sale |
@@ -161,6 +161,7 @@ Todos con fecha de modificación 2026-10-01 00:00:00 UTC.
 - Se rompieron a propósito tres cosas a la vez: la categoría sin subcategorías, `modified_since` sin la plantilla y la cantidad a mano en lugar de la libre. Fallaron las pruebas que cubren cada una (`9 failed of 16`). Después se restauró el código.
 - Las dos pruebas agregadas después de la revisión de código fallaban con el controlador anterior (`2 failed of 18`).
 - Los ejemplos de este README se corrieron con `curl` contra Odoo en marcha.
+- En el navegador, con la base `sia_navegador`: la lista, cada filtro solo y combinados, los errores de fecha, de parámetro desconocido y de categoría, la consulta sin sesión y el 403 del usuario del portal.
 - Instalación en una base nueva: el registro no tiene `WARNING`, `ERROR` ni mensajes de docutils de este módulo. Quedan dos mensajes de docutils (`<string>:38: (ERROR/3)` y `<string>:43: (WARNING/2)`) que salen al cargar el módulo `mail` de Odoo.
 - Linter del repositorio (`.pylintrc` y `.pylintrc-mandatory`): solo marca que el autor del manifest no es la OCA, igual que en los otros módulos del repositorio.
 
@@ -173,6 +174,7 @@ Todos con fecha de modificación 2026-10-01 00:00:00 UTC.
 
 ## Supuestos
 
+- Solo los usuarios internos usan la API. Un usuario del portal (un cliente con acceso a «Mi cuenta») recibe 403 `FORBIDDEN` aunque tenga sesión. La API muestra cantidades de inventario, que no son información para clientes. Además, los módulos `product` y `stock` no le dan al portal permiso de lectura sobre productos ni stock: sin este bloqueo, su consulta terminaría en un error 500. Lo fija la prueba `test_portal_user_forbidden`.
 - La cantidad disponible es la libre (a mano menos reservado), no la cantidad a mano: lo reservado ya está prometido a otro pedido.
 - Los servicios se incluyen porque se pueden vender. Siempre salen con cantidad `0.0`.
 - El precio es el de la ficha del producto, sin impuestos ni listas de precios, en la moneda de la compañía.
