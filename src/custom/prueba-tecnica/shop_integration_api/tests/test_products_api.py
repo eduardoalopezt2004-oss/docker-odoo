@@ -320,21 +320,22 @@ class TestProductsApi(HttpCase):
     def test_every_get_call_is_logged(self):
         Log = self.env["shop.api.log"].sudo()
         before = Log.search_count([])
+        # Primero la llamada sin credenciales: después de autenticar, la cookie de sesión sigue en el cliente.
+        self.assertEqual(self._get(login=None).status_code, 401)
         self.assertEqual(self._get().status_code, 200)
         self.assertEqual(self._get("?categ=1").status_code, 400)
-        self.assertEqual(self._get(login=None).status_code, 401)
         logs = Log.search([], order="id desc", limit=3)
         self.assertEqual(Log.search_count([]), before + 3)
         self.assertEqual(
             [(log.endpoint, log.status_code, log.error_code) for log in reversed(logs)],
             [
+                ("GET /api/v1/products", 401, "UNAUTHORIZED"),
                 ("GET /api/v1/products", 200, False),
                 ("GET /api/v1/products", 400, "INVALID_PARAMETER"),
-                ("GET /api/v1/products", 401, "UNAUTHORIZED"),
             ],
         )
-        self.assertEqual(logs[-1].user_id, self.api_user)
-        self.assertFalse(logs[0].user_id)
+        self.assertFalse(logs[-1].user_id)
+        self.assertEqual(logs[0].user_id, self.api_user)
         self.assertNotIn("categ", json.dumps(logs.read(), default=str))
 
     def test_portal_user_forbidden(self):

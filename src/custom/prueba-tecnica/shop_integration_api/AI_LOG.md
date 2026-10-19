@@ -47,10 +47,12 @@ Partes donde preferí no delegar:
 
 ## Prompts clave (tramo B)
 
-1. "Define el contrato del tramo B: autenticación para el POST, formato del cuerpo, errores y qué se guarda en el log. Verifica contra el código de Odoo 18 lo que condicione el diseño."
+Resúmenes, no citas textuales:
+
+1. Definir el contrato del tramo B (autenticación del POST, formato del cuerpo, errores y qué se guarda en el log) y verificar contra el código de Odoo 18 lo que condicione el diseño.
    - La IA propuso el contrato y señaló los puntos del código de Odoo que lo condicionan: la verificación de claves en `res.users.apikeys`, que `auth='bearer'` rechaza la clave mala sin JSON y sin pasar por el log, que con `auth='none'` Odoo abre un cursor de solo lectura (hace falta `readonly=False`), que las reglas de registro se aplican al crear (el vendedor por defecto es el del cliente) y que `vat` se guarda tal como se escribió.
 2. Mis decisiones sobre el contrato: el pedido queda como cotización; el GET acepta la clave o la sesión; el usuario de la tienda es el vendedor con «solo documentos propios»; en las líneas la clave se llama `default_code` (como en el ejemplo de error del enunciado) y no `code`; y los supuestos 1 a 4 (referencia externa sin unicidad, productos sin referencia no se piden, líneas repetidas no se suman, log sin depuración ni límite de llamadas).
-3. "Primero las pruebas, que deben fallar; después el código en commits separados; al final README y AI_LOG. No inventes resultados: no se puede correr Odoo."
+3. Primero las pruebas, que deben fallar; después el código en commits separados; al final README y AI_LOG. Sin inventar resultados, porque no se podía correr Odoo.
 
 ## Qué decidí yo (tramo B)
 
@@ -66,6 +68,8 @@ Partes donde preferí no delegar:
 - En la primera versión de las pruebas, la clave del usuario del portal se creaba con 30 días de duración, pero esa duración no está permitida para quien no es usuario interno. Se corrigió antes de subir (ajuste agregado al commit de pruebas).
 - La primera versión de una prueba para comprobar que el cliente y los productos se buscan una sola vez (no una por línea) quedó con código enredado y sin sentido. Se reemplazó por una prueba que cuenta las llamadas a `_find_customer` y `_find_products`.
 - Para registrar el código de error en el log, la primera versión del controlador lo leía de la respuesta ya armada (`response.json`), lo que depende de un detalle de la clase de respuesta que no se pudo comprobar. Se cambió para guardar el código desde el lugar donde se produce el error.
+
+- Al pedirle que comprobara todo lo hecho, la IA releyó el código contra las pruebas y encontró cinco errores en las pruebas que había escrito, que habrían fallado con el código correcto: la prueba de cuerpo vacío mandaba un GET y no un POST (`url_open` cambia de método cuando no hay cuerpo); la llamada «sin credenciales» del log del GET iba después de iniciar sesión, con la cookie todavía activa; una prueba suponía que existe la categoría con id 1; otra usaba un atributo de campo poco fiable para listar los campos del log; y otra fallaba si la base trae pedidos sin vendedor, que la regla de Odoo también deja ver. Se corrigieron en un commit aparte.
 
 ## Lo que no se pudo verificar
 

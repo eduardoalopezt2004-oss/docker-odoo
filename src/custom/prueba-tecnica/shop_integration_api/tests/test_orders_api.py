@@ -2,7 +2,7 @@ import json
 from datetime import timedelta
 from unittest.mock import patch
 
-from odoo import fields
+from odoo import fields, models
 from odoo.exceptions import AccessError
 from odoo.tests import HttpCase, new_test_user, tagged
 
@@ -97,7 +97,10 @@ class TestOrdersApi(HttpCase):
         if auth:
             headers["Authorization"] = f"Bearer {key or self.store_key}"
         data = raw if raw is not None else json.dumps(self._body() if body is None else body)
-        return self.url_open(ORDERS_URL, data=data, headers=headers, allow_redirects=False)
+        # Se llama a opener.post y no a url_open: url_open manda un GET si el cuerpo viene vacío.
+        return self.opener.post(
+            self.base_url() + ORDERS_URL, data=data, headers=headers, allow_redirects=False, timeout=12
+        )
 
     def _last_log(self):
         return self.env["shop.api.log"].sudo().search([], order="id desc", limit=1)
@@ -248,12 +251,15 @@ class TestOrdersApi(HttpCase):
         self.assertFalse(self._orders_with_ref(SECRET_REF))
 
     def test_store_user_sees_only_own_orders(self):
-        self.assertEqual(self._post().status_code, 201)
+        response = self._post()
+        self.assertEqual(response.status_code, 201, response.text)
+        own = self.env["sale.order"].browse(response.json()["id"])
         foreign = self.env["sale.order"].sudo().create({"partner_id": self.customer.id, "user_id": self.other_salesman.id})
         visible = self.env["sale.order"].with_user(self.store_user).search([])
+        self.assertIn(own, visible)
         self.assertNotIn(foreign, visible)
-        self.assertTrue(visible)
-        self.assertTrue(all(order.user_id == self.store_user for order in visible))
+        # La regla de Odoo también deja ver los pedidos sin vendedor; ninguno de otro vendedor.
+        self.assertFalse(visible.filtered(lambda order: order.user_id and order.user_id != self.store_user))
 
     # Método y cuerpo
 
@@ -470,7 +476,7 @@ class TestOrdersApi(HttpCase):
         self.assertEqual(self._post(self._body(customer_rif="J-00000000-0")).status_code, 422)
         self.assertEqual(
             self.url_open(
-                f"{PRODUCTS_URL}?category_id=1&modified_since=2026-01-01",
+                f"{PRODUCTS_URL}?category_id={self.env.ref('product.product_category_all').id}&modified_since=2026-01-01",
                 headers={"Authorization": f"Bearer {self.store_key}"},
             ).status_code,
             200,
@@ -483,7 +489,7 @@ class TestOrdersApi(HttpCase):
             for text in forbidden:
                 self.assertNotIn(text, dump)
         # El modelo no tiene dónde guardar cabeceras, cuerpo, consulta ni IP.
-        custom = {name for name, field in logs._fields.items() if not field.automatic}
+        custom = set(logs._fields) - set(models.MAGIC_COLUMNS) - {"display_name"}
         self.assertEqual(custom, {"endpoint", "user_id", "status_code", "duration_ms", "error_code"})
 
     def test_log_access_rights(self):

@@ -16,7 +16,7 @@ Recomendamos un usuario solo para la tienda, con el tipo «Usuario interno» y e
 
 ### Con clave (Bearer)
 
-1. El usuario de la tienda entra a Odoo, abre **Preferencias → Seguridad de la cuenta → Nueva clave de API** y copia la clave. Odoo la muestra una sola vez. Dura hasta 90 días (el grupo «Usuario interno» permite ese máximo); al vencer hay que crear otra.
+1. El usuario de la tienda entra a Odoo, abre **Preferencias → Seguridad de la cuenta → Nueva clave de API** y copia la clave (si la sección de claves no aparece, activar el modo desarrollador). Odoo la muestra una sola vez. Dura hasta 90 días (el grupo «Usuario interno» permite ese máximo); al vencer hay que crear otra.
 2. La tienda manda la clave en cada llamada:
 
    ```bash
@@ -141,7 +141,7 @@ La tienda no manda precios: precios, impuestos y lista de precios los calcula Od
 
 ### Errores del POST
 
-Misma forma que en el GET. `field` es la ruta exacta del dato (`customer_rif`, `lines[1].quantity`, `lines[1].default_code`); el índice de las líneas empieza en 0. Hay un solo error por respuesta. Primero se revisa la forma de todo el cuerpo (de arriba abajo, y las líneas en orden); después se busca el cliente y luego los productos, línea por línea.
+Misma forma que en el GET. `field` es la ruta exacta del dato (`customer_rif`, `lines[1].quantity`, `lines[1].default_code`); el índice de las líneas empieza en 0. Hay un solo error por respuesta. Antes que nada se revisan las credenciales (401/403) y el método (405). Después se revisa la forma de todo el cuerpo: primero los campos desconocidos, luego `customer_rif`, `external_ref` y `lines`, y las líneas en orden (una cantidad cero o negativa se detecta aquí). Al final se busca el cliente y luego los productos, línea por línea; en esta etapa se detecta la cantidad que queda en 0 al redondear a la unidad del producto.
 
 | HTTP | `code` | `field` | Cuándo |
 |---|---|---|---|
@@ -277,7 +277,7 @@ Las pruebas (`tests/test_products_api.py`) llaman a la API por HTTP con un usuar
 | Filtros combinados | `test_filters_combined` (seis combinaciones, una con resultado vacío) |
 | Fecha mal escrita: 400 claro, nunca 500 | `test_invalid_date` (once valores: mes 13, 30 de febrero, `01/10/2026`, con espacio, con huso horario, dígitos de ancho completo, vacío...) |
 | Otros valores inválidos | `test_invalid_category`, `test_invalid_in_stock`, `test_unknown_and_repeated_parameters` |
-| Acceso | `test_requires_session`, `test_portal_user_forbidden`, `test_access_error_is_forbidden`, `test_only_get`, `test_api_user_has_no_inventory_rights` |
+| Acceso | `test_requires_credentials`, `test_portal_user_forbidden`, `test_access_error_is_forbidden`, `test_only_get`, `test_api_user_has_no_inventory_rights` |
 | Error inesperado sin detalles | `test_unexpected_error_is_json_without_details` |
 
 Las pruebas del tramo B están en `tests/test_orders_api.py` (POST, claves, permisos, log) y en `tests/test_products_api.py` (GET con clave o sesión).
