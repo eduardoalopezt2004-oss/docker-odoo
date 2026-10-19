@@ -37,13 +37,15 @@ El comando termina con código 0 aunque haya pruebas con error: hay que leer la 
 | `t-esc` en el reporte | Odoo 18 lo marca como obsoleto ("Found deprecated directive @t-esc… Replace by @t-out") | `t-out`, que escapa el texto igual |
 | `from odoo.tests.common import Form` | Odoo 18 lo marca como obsoleto ("odoo.tests.common.Form is deprecated, use odoo.tests.Form") | `from odoo.tests import Form, TransactionCase, tagged` |
 | Prueba `test_name_get_includes_plate` | Usaba `name_get()`, que ya no existe | Se renombró a `test_display_name_includes_plate` y comprueba `display_name` |
+| Pruebas nuevas `test_display_name_same_format_as_name_get` y `test_vehicle_editable_only_in_draft` | Lo que pasó de `name_get` y de `states=` a otro lugar no tenía prueba: si se perdía, las pruebas seguían pasando | La primera compara el texto exacto (número - placa, o número - nombre si no hay placa). La segunda edita el tipo en borrador y espera solo lectura en curso. Se comprobó que falla si se quita el `readonly` del formulario |
+| Descripción del módulo (`static/description/index.html`, archivo nuevo) | Sin ese archivo, Odoo 18 lee el README como reStructuredText al instalar, y la tabla de esta sección deja tres mensajes de docutils en el registro (`(WARNING/2)` y `(ERROR/3)` en la línea 25) | Una descripción corta en HTML. Odoo la muestra en Aplicaciones y ya no procesa el README |
 
 No cambiaron, porque siguen siendo válidos en 18: los grupos, reglas de registro y permisos; los menús; la secuencia y los puntos del checklist; la vista de búsqueda; `_sql_constraints`.
 
 ## Cómo se verificó
 
-- Pruebas en una base nueva: `0 failed, 0 error(s) of 9 tests`.
-- Instalación en una base nueva (`odoo -i fleet_inspection --log-level=info`): el registro no tiene ningún `WARNING`, `ERROR` ni aviso de obsolescencia.
+- Pruebas en una base nueva: `0 failed, 0 error(s) of 11 tests`.
+- Instalación en una base nueva (`odoo -i fleet_inspection --log-level=info`): el registro no tiene `WARNING`, `ERROR` ni avisos de obsolescencia del logger, ni mensajes de docutils de este módulo. Quedan dos mensajes de docutils (`<string>:38: (ERROR/3)` y `<string>:43: (WARNING/2)`) que salen al cargar el módulo `mail` de Odoo, antes de que empiece `fleet_inspection`.
 - En esa base, desde `odoo shell` y deshaciendo todo al final:
   - El nombre mostrado incluye la placa.
   - El reporte se genera con la placa y el checklist.
@@ -54,4 +56,5 @@ No cambiaron, porque siguen siendo válidos en 18: los grupos, reglas de registr
 ## Supuestos y limitaciones
 
 - La versión queda en `18.0.1.0.0`: la migración no cambia el modelo de datos.
+- En la 16, `states=` en el campo hacía de solo lectura el vehículo y el tipo en cualquier vista que los mostrara. En la 18 esa regla está en el formulario de este módulo, que es la única vista donde se editan. Una vista nueva que los muestre editables tendría que repetir `readonly="state != 'draft'"`.
 - El linter del repositorio marca dos avisos que el módulo ya tenía en la 16: el autor del manifest no es la OCA, y `string="Inspector"` es redundante. No se tocaron para no mezclar mejoras con la migración.
