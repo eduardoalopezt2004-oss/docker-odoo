@@ -3,6 +3,7 @@ import re
 from datetime import datetime
 
 from odoo import http
+from odoo.exceptions import AccessError
 from odoo.http import request
 
 _logger = logging.getLogger(__name__)
@@ -50,6 +51,11 @@ class ShopIntegrationController(http.Controller):
             ]
         except InvalidParameter as error:
             return self._error(400, "INVALID_PARAMETER", error.message, error.field)
+        except AccessError:
+            # Usuario interno al que le falta un permiso (por ejemplo, una compañía
+            # no autorizada): es un problema de acceso, no un error del servidor.
+            _logger.warning("Acceso denegado en GET /api/v1/products para el usuario %s", env.uid, exc_info=True)
+            return self._error(403, "FORBIDDEN", env._("Este usuario no tiene acceso a estos datos."))
         except Exception:
             # Cualquier otro error es nuestro, no de la tienda: queda la traza en el
             # log y la respuesta mantiene el formato acordado, sin detalles internos.
@@ -87,8 +93,18 @@ class ShopIntegrationController(http.Controller):
                 domain.append(("free_qty", ">", 0))
         if "modified_since" in args:
             since = self._parse_datetime(args["modified_since"])
-            # Nombre y precio viven en la plantilla; el código, en la variante.
-            domain += ["|", ("write_date", ">=", since), ("product_tmpl_id.write_date", ">=", since)]
+            # Lo que devuelve la API vive en cuatro lugares: código en la variante;
+            # nombre y precio en la plantilla; precio extra en el valor de atributo
+            # de la plantilla, y nombre del atributo en el valor de atributo.
+            domain += [
+                "|",
+                "|",
+                "|",
+                ("write_date", ">=", since),
+                ("product_tmpl_id.write_date", ">=", since),
+                ("product_template_attribute_value_ids.write_date", ">=", since),
+                ("product_template_attribute_value_ids.product_attribute_value_id.write_date", ">=", since),
+            ]
         return domain
 
     def _parse_category(self, value):

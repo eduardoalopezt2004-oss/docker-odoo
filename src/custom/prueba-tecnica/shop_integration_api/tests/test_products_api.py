@@ -157,6 +157,60 @@ class TestProductsApi(HttpCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json(), {"count": 0, "products": []})
 
+    def test_filter_modified_since_variant_attributes(self):
+        """El precio extra y el nombre del valor de atributo cambian lo que devuelve
+        la API sin tocar la variante ni la plantilla: también cuentan."""
+        attribute = self.env["product.attribute"].create(
+            {"name": "Talla API", "value_ids": [(0, 0, {"name": "S"}), (0, 0, {"name": "XL"})]}
+        )
+        value_s, value_xl = attribute.value_ids
+        template = self.env["product.template"].create(
+            {
+                "name": "Camisa API",
+                "list_price": 20.0,
+                "attribute_line_ids": [(0, 0, {"attribute_id": attribute.id, "value_ids": [(6, 0, attribute.value_ids.ids)]})],
+            }
+        )
+        ptav_xl = template.attribute_line_ids.product_template_value_ids.filtered(
+            lambda v: v.product_attribute_value_id == value_xl
+        )
+        ptav_xl.price_extra = 10.0
+        variant_s = template.product_variant_ids.filtered(lambda p: p.product_template_attribute_value_ids.name == "S")
+        variant_xl = template.product_variant_ids - variant_s
+
+        self.env.flush_all()
+        cr = self.env.cr
+        ptavs = template.attribute_line_ids.product_template_value_ids
+        cr.execute(
+            "UPDATE product_product SET write_date = %s WHERE id IN %s",
+            (OLD_DATE, tuple(template.product_variant_ids.ids)),
+        )
+        cr.execute("UPDATE product_template SET write_date = %s WHERE id = %s", (OLD_DATE, template.id))
+        cr.execute(
+            "UPDATE product_template_attribute_value SET write_date = %s WHERE id IN %s", (OLD_DATE, tuple(ptavs.ids))
+        )
+        cr.execute(
+            "UPDATE product_attribute_value SET write_date = %s WHERE id IN %s",
+            (OLD_DATE, tuple(attribute.value_ids.ids)),
+        )
+        self.env.invalidate_all()
+
+        def changed_variants():
+            response = self._get("?modified_since=2025-01-01")
+            self.assertEqual(response.status_code, 200, response.text)
+            return {p["id"]: p for p in response.json()["products"] if p["id"] in template.product_variant_ids.ids}
+
+        self.assertEqual(changed_variants(), {})
+        # Precio extra de XL cambiado: sale XL, con el nombre del valor y el precio extra.
+        cr.execute("UPDATE product_template_attribute_value SET write_date = %s WHERE id = %s", (RECENT_DATE, ptav_xl.id))
+        changed = changed_variants()
+        self.assertEqual(set(changed), {variant_xl.id})
+        self.assertEqual(changed[variant_xl.id]["name"], "Camisa API (XL)")
+        self.assertEqual(changed[variant_xl.id]["price"], 30.0)
+        # Valor S renombrado: sale también S.
+        cr.execute("UPDATE product_attribute_value SET write_date = %s WHERE id = %s", (RECENT_DATE, value_s.id))
+        self.assertEqual(set(changed_variants()), {variant_s.id, variant_xl.id})
+
     # Filtros combinados
 
     def test_filters_combined(self):
@@ -237,6 +291,18 @@ class TestProductsApi(HttpCase):
             response = self._get()
         self.assertEqual(response.status_code, 500)
         self.assertEqual(response.json()["error"]["code"], "INTERNAL_ERROR")
+        self.assertNotIn("detalle interno", response.text)
+
+    def test_access_error_is_forbidden(self):
+        with (
+            patch.object(
+                ShopIntegrationController, "_products_domain", side_effect=AccessError("detalle interno")
+            ),
+            self.assertLogs("odoo.addons.shop_integration_api", level="WARNING"),
+        ):
+            response = self._get()
+        self.assertEqual(response.status_code, 403, response.text)
+        self.assertEqual(response.json()["error"]["code"], "FORBIDDEN")
         self.assertNotIn("detalle interno", response.text)
 
     def test_api_user_has_no_inventory_rights(self):
