@@ -1,11 +1,14 @@
+import json
 import logging
+import math
 import re
 import time
 from datetime import datetime
 
-from odoo import http
+from odoo import Command, http
 from odoo.exceptions import AccessError
 from odoo.http import request
+from odoo.tools import float_is_zero
 
 _logger = logging.getLogger(__name__)
 
@@ -14,6 +17,11 @@ ALLOWED_PARAMS = ("category_id", "in_stock", "modified_since")
 # fallar la consulta con un error de base de datos.
 MAX_ID = 2147483647
 ID_RE = re.compile(r"[1-9][0-9]*")
+# RIF: una letra y 9 dígitos, ya sin guiones, puntos ni espacios y en mayúscula.
+RIF_RE = re.compile(r"[VEJPGC][0-9]{9}")
+RIF_SEPARATORS_RE = re.compile(r"[-. ]")
+ORDER_FIELDS = ("customer_rif", "external_ref", "lines")
+LINE_FIELDS = ("default_code", "quantity")
 DATE_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}(T[0-9]{2}:[0-9]{2}:[0-9]{2}Z?)?")
 
 
@@ -46,6 +54,12 @@ class ShopIntegrationController(http.Controller):
     @http.route("/api/v1/products", type="http", auth="none", csrf=False, readonly=False)
     def products(self, **_params):
         return self._dispatch("/api/v1/products", "GET", self._products, accept_session=True)
+
+    @http.route("/api/v1/orders", type="http", auth="none", csrf=False, readonly=False)
+    def orders(self, **_params):
+        # Solo clave: aceptar también la cookie de sesión dejaría que otra página web
+        # creara pedidos con la sesión abierta de quien navega.
+        return self._dispatch("/api/v1/orders", "POST", self._create_order, accept_session=False)
 
     def _dispatch(self, path, method, handler, accept_session):
         """Autentica, ejecuta ``handler`` dentro de un savepoint y registra la llamada.
@@ -155,6 +169,188 @@ class ShopIntegrationController(http.Controller):
             for product in products
         ]
         return request.make_json_response({"count": len(result), "products": result})
+
+    def _create_order(self):
+        env = request.env
+        if not env["sale.order"].has_access("create"):
+            raise ApiError(403, "FORBIDDEN", env._("Este usuario no tiene permiso para crear pedidos."))
+        rif, external_ref, lines = self._parse_order(self._json_body())
+        partner = self._find_customer(rif)
+        products = self._find_products([code for code, _qty in lines])
+        order_lines = []
+        for index, (code, quantity) in enumerate(lines):
+            product = self._single(
+                products.get(code),
+                f"lines[{index}].default_code",
+                env._("No existe un producto con el código %s", code),
+            )
+            if float_is_zero(quantity, precision_rounding=product.uom_id.rounding):
+                raise ApiError(
+                    422,
+                    "INVALID_QUANTITY",
+                    env._("La cantidad %s queda en 0 en la unidad de venta del producto %s.", quantity, code),
+                    f"lines[{index}].quantity",
+                )
+            order_lines.append(Command.create({"product_id": product.id, "product_uom_qty": quantity}))
+        # Precios, impuestos y lista de precios los calcula sale.order. El vendedor es
+        # el usuario de la tienda: con «solo documentos propios» Odoo no deja crear un
+        # pedido cuyo vendedor sea otro (el por defecto sería el del cliente).
+        order = env["sale.order"].create(
+            {
+                "partner_id": partner.id,
+                "user_id": env.uid,
+                "client_order_ref": external_ref,
+                "order_line": order_lines,
+            }
+        )
+        return self._order_response(order)
+
+    def _order_response(self, order):
+        return request.make_json_response(
+            {
+                "id": order.id,
+                "name": order.name,
+                "state": order.state,
+                "external_ref": order.client_order_ref,
+                "customer_id": order.partner_id.id,
+                "amount_untaxed": order.amount_untaxed,
+                "amount_total": order.amount_total,
+                "currency": order.currency_id.name,
+            },
+            status=201,
+        )
+
+    def _json_body(self):
+        try:
+            body = json.loads(request.httprequest.get_data())
+        except (ValueError, RecursionError) as exc:
+            raise ApiError(400, "INVALID_JSON", request.env._("El cuerpo no es un JSON válido.")) from exc
+        if not isinstance(body, dict):
+            raise ApiError(400, "INVALID_JSON", request.env._("El cuerpo debe ser un objeto JSON."))
+        return body
+
+    def _parse_order(self, body):
+        """Revisa la forma de todo el cuerpo, sin consultar la base.
+
+        :return: (RIF normalizado, referencia externa, [(código, cantidad)])
+        :raises ApiError: 422 con el campo exacto, el primero que falle
+        """
+        self._reject_unknown(body, ORDER_FIELDS, "")
+        rif = self._required_text(body, "customer_rif", "customer_rif")
+        normalized_rif = RIF_SEPARATORS_RE.sub("", rif).upper()
+        if not RIF_RE.fullmatch(normalized_rif):
+            raise self._invalid_field(
+                "customer_rif",
+                request.env._("customer_rif debe ser una letra (V, E, J, P, G o C) y 9 dígitos: %s", rif),
+            )
+        external_ref = self._required_text(body, "external_ref", "external_ref")
+        raw_lines = body.get("lines")
+        if raw_lines is None:
+            raise self._required_field("lines")
+        if not isinstance(raw_lines, list):
+            raise self._invalid_field("lines", request.env._("lines debe ser una lista."))
+        if not raw_lines:
+            raise self._required_field("lines", request.env._("lines debe traer al menos una línea."))
+        lines = []
+        for index, line in enumerate(raw_lines):
+            path = f"lines[{index}]"
+            if not isinstance(line, dict):
+                raise self._invalid_field(path, request.env._("%s debe ser un objeto.", path))
+            self._reject_unknown(line, LINE_FIELDS, f"{path}.")
+            code = self._required_text(line, "default_code", f"{path}.default_code")
+            lines.append((code, self._quantity(line, f"{path}.quantity")))
+        return normalized_rif, external_ref, lines
+
+    def _reject_unknown(self, data, allowed, prefix):
+        for name in data:
+            if name not in allowed:
+                raise self._invalid_field(
+                    f"{prefix}{name}",
+                    request.env._("Campo desconocido: %s%s. Los admitidos son %s.", prefix, name, ", ".join(allowed)),
+                )
+
+    def _required_text(self, data, name, path):
+        value = data.get(name)
+        if value is None or (isinstance(value, str) and not value.strip()):
+            raise self._required_field(path)
+        if not isinstance(value, str):
+            raise self._invalid_field(path, request.env._("%s debe ser un texto.", path))
+        return value
+
+    def _quantity(self, line, path):
+        value = line.get("quantity")
+        if value is None:
+            raise self._required_field(path)
+        # bool es un int en Python: true no es una cantidad.
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise self._invalid_field(path, request.env._("%s debe ser un número, no un texto ni un booleano.", path))
+        try:
+            quantity = float(value)
+        except OverflowError:
+            quantity = math.inf
+        if not math.isfinite(quantity):
+            raise self._invalid_field(path, request.env._("%s debe ser un número finito.", path))
+        if quantity <= 0:
+            raise ApiError(422, "INVALID_QUANTITY", request.env._("%s debe ser mayor que 0.", path), path)
+        return quantity
+
+    def _required_field(self, path, message=None):
+        return ApiError(
+            422, "REQUIRED_FIELD", message or request.env._("El campo %s es obligatorio.", path), path
+        )
+
+    def _invalid_field(self, path, message):
+        return ApiError(422, "INVALID_FIELD", message, path)
+
+    def _find_customer(self, rif):
+        """Empresa cliente con ese RIF ya normalizado.
+
+        Odoo guarda ``vat`` tal como se escribió, así que se compara quitando
+        guiones, puntos y espacios y en mayúscula. Los contactos de una empresa
+        copian su RIF: se cuentan por su empresa (``commercial_partner_id``).
+        """
+        env = request.env
+        Partner = env["res.partner"]
+        Partner.flush_model(["vat", "active"])
+        env.cr.execute(
+            """
+            SELECT id FROM res_partner
+             WHERE active AND UPPER(REGEXP_REPLACE(vat, '[-. ]', '', 'g')) = %s
+            """,
+            [rif],
+        )
+        # La búsqueda con el ORM aplica las reglas de registro del usuario de la API.
+        partners = Partner.search([("id", "in", [row[0] for row in env.cr.fetchall()])])
+        companies = partners.commercial_partner_id
+        return self._single(
+            companies,
+            "customer_rif",
+            env._("No existe un cliente con el RIF %s", rif),
+            not_found="CUSTOMER_NOT_FOUND",
+        )
+
+    def _find_products(self, codes):
+        """Productos vendibles de todos los códigos, en una sola búsqueda: {código: productos}."""
+        found = {}
+        products = request.env["product.product"].search(
+            [("default_code", "in", list(set(codes))), ("sale_ok", "=", True)]
+        )
+        for product in products:
+            found[product.default_code] = found.get(product.default_code, product.browse()) | product
+        return found
+
+    def _single(self, records, field, not_found_message, not_found="PRODUCT_NOT_FOUND"):
+        """El único registro, o el error 422 de «no existe» / «hay más de uno»."""
+        if not records:
+            raise ApiError(422, not_found, not_found_message, field)
+        if len(records) > 1:
+            raise ApiError(
+                422,
+                "AMBIGUOUS_REFERENCE",
+                request.env._("Hay más de un registro para esta referencia; no se puede elegir uno."),
+                field,
+            )
+        return records
 
     def _products_domain(self, args):
         """Dominio de productos activos y vendibles según los filtros de la consulta.
