@@ -9,6 +9,9 @@
   - Revisión obligatoria de cada tramo contra los criterios del enunciado antes de cerrarlo.
   - Condición de cierre: pruebas en base nueva, linter del repositorio y mi verificación en el
     navegador antes de cada push.
+  - En el tramo B usé créditos de Claude Code en la nube para el trabajo más pesado (escribir el
+    código y las pruebas), para optimizar tiempo y créditos. Después lo probé y ajusté en el
+    entorno local.
 
 Delegué en la IA la redacción de código, pruebas y documentos, dentro de esas reglas. Mi trabajo
 fue definir el método, revisar y aprobar cada propuesta, decidir los supuestos y verificar el
