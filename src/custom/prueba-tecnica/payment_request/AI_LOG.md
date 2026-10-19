@@ -37,3 +37,34 @@ Partes donde preferí no delegar:
 - Las preguntas a Carolina y los supuestos para avanzar sin su respuesta.
 - Las decisiones de control del tramo A: Tesorería separada de Aprobador, porque quien paga no aprueba; bloquear la auto-aprobación desde el tramo A, y que una solicitud rechazada no vuelva atrás.
 - La verificación en el navegador con un usuario por grupo, hasta la aprobación.
+
+---
+
+# Tramo B — niveles de aprobación, rechazo con motivo, pago y reporte
+
+## Prompts clave (tramo B)
+
+1. "¿Podemos avanzar con el tramo B con lo que ya está en el repositorio y el enunciado?"
+   - La IA revisó el estado del módulo y propuso un diseño apoyado en los supuestos del README del tramo A (un solo aprobador por nivel de monto, el aprobador no sale del jefe del empleado, pago suelto sin cruzar con factura). Dejó tres puntos abiertos para que yo decidiera.
+2. "Sí a la atribución sin líneas de sesión y a que el envío falle si el aprobador es quien pidió el pago; la pregunta del monto sin nivel, desarróllala."
+   - Desarrolló el caso de un monto que ningún nivel cubre con tres opciones y sus riesgos.
+3. "Sí, la opción 1." Con eso arrancó: primero las pruebas, después el código en commits separados y al final README y AI_LOG.
+
+## Qué decidí yo (tramo B)
+
+- **Sin nivel para el monto, el envío se bloquea** con un mensaje claro, en lugar de enviar sin aprobador o de tener un aprobador por defecto. Evita justo lo que el cliente quiere evitar: una solicitud enviada que nadie aprueba.
+- **Si el aprobador del nivel es quien pidió el pago, el envío falla** y no se reasigna en silencio.
+- **Los commits van sin líneas de atribución ni de sesión.**
+
+## Lo que la IA hizo mal (tramo B)
+
+- Su primer diseño dejaba la asignación del aprobador en `action_submit`. Pero el tramo A ya valida los cambios de estado en `write` para que valgan también con una escritura directa, y una escritura directa de `state = "submitted"` habría dejado una solicitud enviada sin aprobador. Se movió a `write` y se agregó una prueba.
+- Planteó marcar la actividad del aprobador como hecha al aprobar. Eso agrega un mensaje al chatter y rompe la prueba del tramo A que comprueba que el último mensaje es el del cambio de estado; se cambió a borrar la actividad.
+- Al escribir las pruebas ajustó las del tramo A (que ahora necesitan un nivel antes de enviar) pero en la prueba de «un aprobador no aprueba su propia solicitud» intentó llegar al estado enviado con `sudo().write`, que ya no es posible porque el envío falla. Se cambió por una escritura SQL para conservar la defensa en profundidad del tramo A.
+- En su primera versión del pago, el estado «pagada» se podía escribir directamente sin pago, y «rechazada» sin motivo. Se agregaron los chequeos y sus pruebas.
+
+## Lo que no se pudo verificar
+
+- No se corrió Odoo: ninguna prueba del tramo B se ha ejecutado y la sección «Cómo se verificó (tramo B)» del README quedó pendiente.
+- El código de Odoo no estaba disponible para consultarlo. Las firmas y el comportamiento de `account.payment` (campos al crear y publicar), `_convert`, `activity_schedule`, `activity_unlink` y `_render_qweb_html` se escribieron de memoria. Las pruebas de pago también suponen que existe un diario de banco y un plan de cuentas en la base de pruebas.
+- Solo se pasó un análisis estático básico con `ruff` (sintaxis y nombres sin definir). El linter del repositorio (`pylint` con `pylint_odoo`) no estaba instalado.
