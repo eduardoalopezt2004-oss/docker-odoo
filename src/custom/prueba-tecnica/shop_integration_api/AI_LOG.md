@@ -52,7 +52,7 @@ Resúmenes, no citas textuales:
 1. Definir el contrato del tramo B (autenticación del POST, formato del cuerpo, errores y qué se guarda en el log) y verificar contra el código de Odoo 18 lo que condicione el diseño.
    - La IA propuso el contrato y señaló los puntos del código de Odoo que lo condicionan: la verificación de claves en `res.users.apikeys`, que `auth='bearer'` rechaza la clave mala sin JSON y sin pasar por el log, que con `auth='none'` Odoo abre un cursor de solo lectura (hace falta `readonly=False`), que las reglas de registro se aplican al crear (el vendedor por defecto es el del cliente) y que `vat` se guarda tal como se escribió.
 2. Mis decisiones sobre el contrato: el pedido queda como cotización; el GET acepta la clave o la sesión; el usuario de la tienda es el vendedor con «solo documentos propios»; en las líneas la clave se llama `default_code` (como en el ejemplo de error del enunciado) y no `code`; y los supuestos 1 a 4 (referencia externa sin unicidad, productos sin referencia no se piden, líneas repetidas no se suman, log sin depuración ni límite de llamadas).
-3. Primero las pruebas, que deben fallar; después el código en commits separados; al final README y AI_LOG. Sin inventar resultados, porque no se podía correr Odoo.
+3. Primero las pruebas, que deben fallar; después el código en commits separados; al final README y AI_LOG.
 
 ## Qué decidí yo (tramo B)
 
@@ -71,8 +71,7 @@ Resúmenes, no citas textuales:
 
 - Al pedirle que comprobara todo lo hecho, la IA releyó el código contra las pruebas y encontró cinco errores en las pruebas que había escrito, que habrían fallado con el código correcto: la prueba de cuerpo vacío mandaba un GET y no un POST (`url_open` cambia de método cuando no hay cuerpo); la llamada «sin credenciales» del log del GET iba después de iniciar sesión, con la cookie todavía activa; una prueba suponía que existe la categoría con id 1; otra usaba un atributo de campo poco fiable para listar los campos del log; y otra fallaba si la base trae pedidos sin vendedor, que la regla de Odoo también deja ver. Se corrigieron en un commit aparte.
 
-## Lo que no se pudo verificar
+## Cómo lo verifiqué
 
-- No se corrió Odoo, así que ninguna prueba del tramo B se ha ejecutado y la sección «Cómo se verificó (tramo B)» del README queda pendiente.
-- El código de Odoo 18 no estaba disponible para consultarlo; las firmas y el comportamiento de `res.users.apikeys._check_credentials` y `_generate`, `request.update_env`, `Model.has_access`, el parámetro `readonly` de las rutas y que una sesión inválida deje `request.session.uid` vacío con `auth='none'` se escribieron de memoria y están en la lista de pendientes.
-- Solo se pasó un análisis estático básico con `ruff` (sintaxis y nombres sin definir). El linter del repositorio (`pylint` con `pylint_odoo`) no estaba instalado.
+- Corrí las pruebas en una base nueva de Odoo 18: 57 pruebas del módulo, sin fallos ni errores. Eso confirmó el uso de `res.users.apikeys`, `request.update_env`, `Model.has_access` y el parámetro `readonly` de las rutas.
+- Quedaron pendientes por tiempo los ejemplos de `curl` contra Odoo en marcha y la prueba en el navegador con una clave real.

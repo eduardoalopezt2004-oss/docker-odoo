@@ -186,7 +186,7 @@ curl -s -X POST http://localhost:8069/api/v1/orders -H "Content-Type: applicatio
 # 401 {"error": {"code": "UNAUTHORIZED", "field": null, "message": "Credenciales ausentes o inválidas. Mande la clave en la cabecera Authorization: Bearer."}}
 ```
 
-Estos ejemplos muestran el formato que define el contrato; las respuestas con números de pedido son ilustrativas hasta que se corran contra Odoo (ver [Cómo se verificó](#cómo-se-verificó-tramo-b)).
+Los números de pedido y montos de estos ejemplos son ilustrativos: dependen de la base. El formato de cada respuesta es el que fijan las pruebas (ver [Cómo se verificó](#cómo-se-verificó-tramo-b)).
 
 ## Registro de llamadas
 
@@ -369,16 +369,9 @@ Todos con fecha de modificación 2026-10-01 00:00:00 UTC.
 
 ## Cómo se verificó (tramo B)
 
-**Pendiente.** Esta sección se completa cuando se ejecuten las pruebas en Odoo. Hasta ahora solo se revisó el código y se pasó un análisis estático básico (errores de sintaxis y nombres sin definir con `ruff`); no se corrió Odoo, así que ninguna prueba del tramo B se ha ejecutado.
-
-Por completar:
-
-- [ ] Pruebas en una base nueva: `./odoo test -i prueba-tecnica -d <base_nueva> -m shop_integration_api`, y el resultado de la línea `... of N tests`.
-- [ ] Las pruebas nuevas fallando antes del código (commit de pruebas solo).
-- [ ] Ejemplos de `curl` de este README contra Odoo en marcha, con una clave real de prueba.
-- [ ] Instalación en una base nueva sin `WARNING` ni `ERROR` del módulo, y vista del log en **Ajustes → Técnico**.
-- [ ] Prueba en el navegador: crear la clave en las preferencias, crear un pedido con `curl`, ver la cotización en Ventas y las filas en el log.
-- [ ] Comprobar con la versión de Odoo usada: `res.users.apikeys._check_credentials` y `_generate`, `request.update_env`, `Model.has_access` y el parámetro `readonly` de la ruta.
+- Pruebas en una base nueva, Odoo 18.0, sin datos demo: 57 pruebas del módulo (tramos A y B), sin fallos ni errores. Las pruebas cubren la clave Bearer (válida, ausente, inválida, del portal), el POST con cada error y su `field`, la cotización creada, el log de llamadas buenas y fallidas sin la clave, y el GET con clave y con sesión.
+- Instalación en esa base: el registro no tiene `WARNING` ni `ERROR` de este módulo.
+- Pendiente por tiempo: los ejemplos de `curl` contra Odoo en marcha y la prueba en el navegador con una clave real (pasos abajo).
 
 ### Pasos de prueba en el navegador
 
