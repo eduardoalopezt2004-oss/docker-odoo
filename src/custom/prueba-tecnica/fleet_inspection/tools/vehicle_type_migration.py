@@ -5,13 +5,21 @@ en los scripts para poder probarlo sin ejecutar -u.
 """
 
 import logging
+import time
 
 from odoo.exceptions import UserError
-from odoo.tools import sql
+from odoo.tools import SQL, sql
+
+try:
+    import resource
+except ImportError:  # Windows: sin dato de memoria en el registro.
+    resource = None
 
 _logger = logging.getLogger(__name__)
 
 LEGACY_COLUMN = "vehicle_type_legacy"
+# Inspecciones que toca cada sentencia UPDATE.
+DEFAULT_BATCH_SIZE = 1000
 
 # Valor de la selección en 18.0.1.0.0 -> registro del catálogo. Ningún valor
 # queda sin destino, incluido "other".
@@ -44,7 +52,15 @@ def preserve_legacy_vehicle_type(cr, table="fleet_inspection"):
     return True
 
 
-def map_legacy_vehicle_types(env):
+def _max_memory_mb():
+    """Memoria máxima (RSS) que usó el proceso hasta ahora, en MB; None si no se puede medir."""
+    if resource is None:
+        return None
+    # En Linux ru_maxrss viene en KB.
+    return round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024)
+
+
+def map_legacy_vehicle_types(env, batch_size=DEFAULT_BATCH_SIZE):
     """Asigna a cada inspección sin tipo el del catálogo según su valor viejo (post-migrate).
 
     Durante la actualización las inspecciones existentes llegan con el tipo vacío:
@@ -52,14 +68,24 @@ def map_legacy_vehicle_types(env):
     catálogo. Solo se completan esas; un tipo ya puesto no se toca, así que
     ejecutar la función otra vez no deshace cambios hechos después de migrar.
 
+    Recorre las inspecciones sin tipo en orden de id, de a ``batch_size``: cada
+    UPDATE toca a lo sumo ese número de filas, y Python solo guarda el último id
+    procesado, así que la memoria no crece con el tamaño de la tabla. Todo ocurre
+    dentro de la transacción de la actualización: si algo falla, se deshace completa.
+
     Detiene la actualización si hay valores viejos sin destino en el catálogo o si
     al final queda alguna inspección sin tipo.
 
+    :param batch_size: inspecciones por lote, mayor que 0.
     :return: cantidad de inspecciones a las que se les asignó tipo.
     """
+    if batch_size < 1:
+        raise ValueError("batch_size debe ser mayor que 0: %s" % batch_size)
+    started = time.monotonic()
     cr = env.cr
     env.flush_all()
     updated = 0
+    batches = 0
     summary = "sin respaldo de la versión anterior"
 
     if sql.column_exists(cr, "fleet_inspection", LEGACY_COLUMN):
@@ -83,17 +109,47 @@ def map_legacy_vehicle_types(env):
                     detail,
                 )
             )
-        for legacy, xmlid in LEGACY_XMLIDS.items():
+        # Pares (valor viejo, id del tipo) para el VALUES del UPDATE.
+        mapping = SQL(", ").join(
+            SQL("(%s, %s)", legacy, env.ref(xmlid).id) for legacy, xmlid in LEGACY_XMLIDS.items()
+        )
+        last_id = 0
+        while True:
+            # Límite del lote: el id de la inspección número batch_size sin tipo después de last_id.
             cr.execute(
                 """
-                UPDATE fleet_inspection
-                   SET vehicle_type = %s
-                 WHERE vehicle_type_legacy = %s
-                   AND vehicle_type IS NULL
+                SELECT max(id) FROM (
+                    SELECT id FROM fleet_inspection
+                     WHERE id > %s AND vehicle_type IS NULL
+                     ORDER BY id
+                     LIMIT %s
+                ) AS batch
                 """,
-                (env.ref(xmlid).id, legacy),
+                (last_id, batch_size),
+            )
+            batch_last_id = cr.fetchone()[0]
+            if batch_last_id is None:
+                break
+            cr.execute(
+                SQL(
+                    """
+                    UPDATE fleet_inspection AS f
+                       SET vehicle_type = m.type_id
+                      FROM (VALUES %s) AS m (legacy, type_id)
+                     WHERE f.vehicle_type_legacy = m.legacy
+                       AND f.vehicle_type IS NULL
+                       AND f.id > %s AND f.id <= %s
+                    """,
+                    mapping,
+                    last_id,
+                    batch_last_id,
+                )
             )
             updated += cr.rowcount
+            batches += 1
+            last_id = batch_last_id
+            if batches % 10 == 0:
+                _logger.info("Tipo de vehículo: %s lotes, %s inspecciones con tipo asignado", batches, updated)
         env["fleet.inspection"].invalidate_model(["vehicle_type"])
         cr.execute(
             """
@@ -119,9 +175,15 @@ def map_legacy_vehicle_types(env):
             )
         )
 
+    memory = _max_memory_mb()
     _logger.info(
-        "Tipo de vehículo migrado: %s inspecciones recibieron su tipo del catálogo. Valor viejo -> tipo: %s",
+        "Tipo de vehículo migrado: %s inspecciones recibieron su tipo del catálogo, en %s lotes de hasta %s, "
+        "en %.2f s; memoria máxima del proceso: %s MB. Valor viejo -> tipo: %s",
         updated,
+        batches,
+        batch_size,
+        time.monotonic() - started,
+        memory if memory is not None else "no disponible",
         summary,
     )
     return updated
