@@ -42,7 +42,7 @@ class TestPaymentApproval(TransactionCase):
         return (
             cls.env["res.users"]
             .with_context(no_reset_password=True)
-            .create({"name": login, "login": login, "groups_id": [Command.set(groups.ids)]})
+            .create({"name": login, "login": login, "email": f"{login}@example.com", "groups_id": [Command.set(groups.ids)]})
         )
 
     @classmethod
