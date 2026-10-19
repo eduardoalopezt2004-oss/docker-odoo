@@ -3,13 +3,6 @@ from datetime import timedelta
 from odoo import _, api, fields, models
 from odoo.exceptions import UserError, ValidationError
 
-VEHICLE_TYPES = [
-    ("motorcycle", "Moto"),
-    ("car", "Carro"),
-    ("truck", "Camión"),
-    ("other", "Otro"),
-]
-
 
 class FleetInspection(models.Model):
     _name = "fleet.inspection"
@@ -24,11 +17,14 @@ class FleetInspection(models.Model):
         required=True,
         tracking=True,
     )
-    vehicle_type = fields.Selection(
-        VEHICLE_TYPES,
+    # Many2one desde 18.0.1.1.0 (antes, selección). Conserva el nombre técnico
+    # para no cambiar vistas, reporte, filtros ni referencias externas.
+    vehicle_type = fields.Many2one(
+        "fleet.inspection.vehicle.type",
         string="Tipo de vehículo",
         required=True,
-        default="car",
+        default=lambda self: self.env.ref("fleet_inspection.vehicle_type_car", raise_if_not_found=False),
+        ondelete="restrict",
         tracking=True,
     )
     inspector_id = fields.Many2one(
