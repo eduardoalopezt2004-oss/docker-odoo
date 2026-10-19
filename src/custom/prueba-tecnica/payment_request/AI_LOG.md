@@ -72,5 +72,5 @@ Partes donde preferí no delegar:
 
 ## Cómo lo verifiqué
 
-- Corrí las pruebas en una base nueva de Odoo 18 con `account` instalado: 47 pruebas del módulo, sin fallos ni errores después de la corrección. Eso confirmó el uso de `account.payment`, `_convert`, `activity_schedule` y el reporte.
+- Corrí las pruebas en una base nueva de Odoo 18 con `account` instalado: 49 pruebas del módulo, sin fallos ni errores después de la corrección. Eso confirmó el uso de `account.payment`, `_convert`, `activity_schedule` y el reporte.
 - Pruebas en el navegador automatizadas por la IA, con un usuario por grupo: envío con aprobador asignado y su actividad, rechazo con motivo en el chatter, pago con diario y PDF con quién aprobó y cuándo. Después las revisé en el navegador para confirmar.

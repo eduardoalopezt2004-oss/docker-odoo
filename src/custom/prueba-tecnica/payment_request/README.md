@@ -131,9 +131,9 @@ A mano, con un usuario por grupo y un administrador:
 
 ## Cómo se verificó (tramo B)
 
-- Pruebas en una base nueva de Odoo 18.0, sin datos demo y con `account` instalado: 47 pruebas del módulo (tramos A y B), sin fallos ni errores. Cubren los niveles por monto, el aprobador asignado con su actividad, que solo él apruebe, el rechazo con motivo en el chatter, el pago vinculado, que no se pueda pagar dos veces y el PDF con quién aprobó y cuándo.
+- Pruebas en una base nueva de Odoo 18.0, sin datos demo y con `account` instalado: 49 pruebas del módulo (tramos A y B), sin fallos ni errores. Cubren los niveles por monto, el aprobador asignado con su actividad, que solo él apruebe, el rechazo con motivo en el chatter, el pago vinculado, que no se pueda pagar dos veces y el PDF con quién aprobó y cuándo.
 - La primera corrida dio 37 errores con una sola causa: los usuarios de las pruebas no tenían correo, y Odoo no puede notificar la actividad del aprobador sin el correo de quien envía. Se corrigió dándoles un correo de ejemplo en las pruebas.
-- Limitación: para enviar una solicitud, el usuario necesita un correo configurado, porque Odoo lo exige al notificar la actividad del aprobador.
+- Supuesto: quien envía o rechaza una solicitud tiene un correo en su usuario, porque Odoo lo usa para avisar al aprobador o al solicitante. Si falta, el módulo lo dice con un mensaje claro antes de intentarlo, en lugar del error técnico de Odoo. Lo fijan las pruebas `test_submit_without_email_has_clear_message` y `test_reject_without_email_has_clear_message`.
 - Pruebas en el navegador automatizadas por la IA, con un usuario por grupo: envío con aprobador asignado y su actividad, rechazo con motivo en el chatter, pago con diario y PDF con quién aprobó y cuándo. Después las revisé en el navegador para confirmar.
 
 ## Supuestos (tramo A)
@@ -183,7 +183,7 @@ A mano, con un usuario por grupo y un administrador:
 | 6. Si se rechaza, ¿la puede corregir y reenviar, o crea una nueva? | Rechazada es un estado final. El empleado crea una solicitud nueva. | A |
 | 7. El pago que registra tesorería, ¿se cruza con la factura del proveedor o es un pago suelto? ¿Puede haber pagos parciales? | Pago suelto al proveedor por el monto total, sin cruzarlo con la factura. Sin pagos parciales. | B |
 | 8. Los pagos grandes, ¿los aprueba solo gerencia o primero el jefe y después gerencia? | Un solo aprobador por solicitud: el del nivel que corresponde al monto. Los pagos grandes los aprueba solo gerencia. | B |
-| 9. ¿Todos los empleados que van a pedir pagos tienen usuario en Odoo? | Sí. Todo usuario interno queda como Solicitante. | A |
+| 9. ¿Todos los empleados que van a pedir pagos tienen usuario en Odoo, con su correo configurado? | Sí. Todo usuario interno queda como Solicitante, y quien envía o rechaza necesita un correo para que el aviso llegue a la otra persona. | A |
 | 10. Si ningún nivel cubre el monto de una solicitud, ¿qué debe pasar? Por ejemplo, si el pago más pequeño que cubre su política empieza por encima de cero. | No se puede enviar: sale un error que pide configurar los niveles. Se recomienda un nivel desde 0. | B |
 
 ## Limitaciones conocidas

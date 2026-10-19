@@ -5,6 +5,13 @@ APPROVER_GROUP = "payment_request.group_payment_approver"
 TREASURY_GROUP = "payment_request.group_payment_treasury"
 
 
+def REJECT_EMAIL_MESSAGE():
+    return _(
+        "Para rechazar la solicitud necesitas un correo en tu usuario: el solicitante recibe el motivo con él. "
+        "Configúralo en Mi perfil o pídeselo a un administrador."
+    )
+
+
 class PaymentRequest(models.Model):
     _name = "payment.request"
     _description = "Solicitud de pago"
@@ -249,7 +256,18 @@ class PaymentRequest(models.Model):
         self.sudo().write({"payment_id": payment.id})
         self.write({"state": "paid"})
 
+    def _check_current_user_email(self, message):
+        """Odoo necesita el correo de quien actúa para avisar a la otra persona; sin él falla con un error técnico."""
+        if not self.env.user.email:
+            raise UserError(message)
+
     def action_submit(self):
+        self._check_current_user_email(
+            _(
+                "Para enviar la solicitud necesitas un correo en tu usuario: el aprobador recibe el aviso con él. "
+                "Configúralo en Mi perfil o pídeselo a un administrador."
+            )
+        )
         self.write({"state": "submitted"})
 
     def action_approve(self):
@@ -259,6 +277,7 @@ class PaymentRequest(models.Model):
         """Abre el asistente del motivo; el rechazo lo hace el asistente."""
         self.ensure_one()
         self._check_state_change("rejected", final=False)
+        self._check_current_user_email(REJECT_EMAIL_MESSAGE())
         return {
             "type": "ir.actions.act_window",
             "name": _("Rechazar solicitud"),
