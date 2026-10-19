@@ -40,3 +40,35 @@ Partes donde preferí no delegar:
 - Las decisiones del contrato: usar desde el tramo A el formato de error del enunciado, publicar la cantidad libre, responder 400 a un parámetro desconocido o a una categoría inexistente, incluir los servicios y dejar los cambios de stock como limitación de `modified_since`.
 - El `sudo()` acotado al cálculo de la cantidad. La otra opción era darle el grupo de Inventario al usuario de la tienda, y con sus credenciales se podría mover inventario.
 - La verificación. Probé la API en el navegador con el usuario de la tienda y con uno del portal, y pedí una verificación automatizada del resto de los casos. Ahí salió que los datos de prueba no tenían la reserva de la Mesa; se corrigieron.
+
+---
+
+# Tramo B — POST /api/v1/orders, clave de API y log de llamadas
+
+## Prompts clave (tramo B)
+
+1. "Define el contrato del tramo B: autenticación para el POST, formato del cuerpo, errores y qué se guarda en el log. Verifica contra el código de Odoo 18 lo que condicione el diseño."
+   - La IA propuso el contrato y señaló los puntos del código de Odoo que lo condicionan: la verificación de claves en `res.users.apikeys`, que `auth='bearer'` rechaza la clave mala sin JSON y sin pasar por el log, que con `auth='none'` Odoo abre un cursor de solo lectura (hace falta `readonly=False`), que las reglas de registro se aplican al crear (el vendedor por defecto es el del cliente) y que `vat` se guarda tal como se escribió.
+2. Mis decisiones sobre el contrato: el pedido queda como cotización; el GET acepta la clave o la sesión; el usuario de la tienda es el vendedor con «solo documentos propios»; en las líneas la clave se llama `default_code` (como en el ejemplo de error del enunciado) y no `code`; y los supuestos 1 a 4 (referencia externa sin unicidad, productos sin referencia no se piden, líneas repetidas no se suman, log sin depuración ni límite de llamadas).
+3. "Primero las pruebas, que deben fallar; después el código en commits separados; al final README y AI_LOG. No inventes resultados: no se puede correr Odoo."
+
+## Qué decidí yo (tramo B)
+
+- **Cotización y no pedido confirmado.** La IA planteaba las dos salidas; elegí la cotización porque un vendedor debe revisar precio, lista de precios y pago, y porque no pasa por la confirmación de `sale_commission`. Acepto el costo: el stock no se reserva hasta confirmar y la última unidad podría venderse dos veces. Queda como pregunta al cliente.
+- **Clave en lugar de sesión para el POST**, y que el POST no acepte la cookie: con cookie, otra página web podría crear pedidos con la sesión abierta de quien navega.
+- **Que el GET acepte la clave o la sesión** y que todas sus llamadas queden en el log.
+- **El usuario de la tienda como vendedor del pedido** en lugar de darle un permiso más amplio sobre pedidos de otros vendedores.
+- **`sudo()` solo donde hace falta** y con comentario: crear la fila del log y ver si el dueño de la clave sigue activo.
+
+## Lo que la IA hizo mal (tramo B)
+
+- Iba a escribir en la documentación que un usuario normal solo puede crear claves de API de 1 día. Es incorrecto: el grupo «Usuario interno» permite claves de hasta 90 días; el límite de 1 día es para quien no tiene ese grupo (por ejemplo, un usuario del portal). Se corrigió en el README y en las pruebas: la clave del usuario del portal se crea con menos de un día y la de los internos con 30 días.
+- En la primera versión de las pruebas, la clave del usuario del portal se creaba con 30 días de duración, pero esa duración no está permitida para quien no es usuario interno. Se corrigió antes de subir (ajuste agregado al commit de pruebas).
+- La primera versión de una prueba para comprobar que el cliente y los productos se buscan una sola vez (no una por línea) quedó con código enredado y sin sentido. Se reemplazó por una prueba que cuenta las llamadas a `_find_customer` y `_find_products`.
+- Para registrar el código de error en el log, la primera versión del controlador lo leía de la respuesta ya armada (`response.json`), lo que depende de un detalle de la clase de respuesta que no se pudo comprobar. Se cambió para guardar el código desde el lugar donde se produce el error.
+
+## Lo que no se pudo verificar
+
+- No se corrió Odoo, así que ninguna prueba del tramo B se ha ejecutado y la sección «Cómo se verificó (tramo B)» del README queda pendiente.
+- El código de Odoo 18 no estaba disponible para consultarlo; las firmas y el comportamiento de `res.users.apikeys._check_credentials` y `_generate`, `request.update_env`, `Model.has_access`, el parámetro `readonly` de las rutas y que una sesión inválida deje `request.session.uid` vacío con `auth='none'` se escribieron de memoria y están en la lista de pendientes.
+- Solo se pasó un análisis estático básico con `ruff` (sintaxis y nombres sin definir). El linter del repositorio (`pylint` con `pylint_odoo`) no estaba instalado.

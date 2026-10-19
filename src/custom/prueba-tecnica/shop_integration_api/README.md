@@ -1,16 +1,31 @@
-# API de productos para la tienda en línea (`shop_integration_api`)
+# API de productos y pedidos para la tienda en línea (`shop_integration_api`)
 
-Ejercicio 1 de la prueba técnica. La tienda en línea del cliente consulta en Odoo el catálogo que puede vender: código, nombre, precio y cantidad disponible de cada producto. Este documento está escrito para quien programa la integración del lado de la tienda.
+Ejercicio 1 de la prueba técnica. La tienda en línea del cliente consulta en Odoo el catálogo que puede vender (código, nombre, precio y cantidad disponible de cada producto) y le manda sus pedidos. Este documento está escrito para quien programa la integración del lado de la tienda.
 
 ## Tramos
 
 - [x] A: `GET /api/v1/products` con sesión de usuario, filtros y errores claros.
-- [ ] B: no iniciado.
+- [x] B: `POST /api/v1/orders` (crea una cotización), autenticación con clave (Bearer) y registro de llamadas. El `GET` acepta la clave o la sesión.
 - [ ] C: no iniciado.
 
 ## Conectarse
 
-La API usa la sesión de un usuario de Odoo (`auth='user'`). Recomendamos un usuario solo para la tienda, con el tipo «Usuario interno» y sin grupos de Ventas ni de Inventario.
+Hay dos formas de autenticarse. El `POST /api/v1/orders` solo acepta la clave; el `GET /api/v1/products` acepta cualquiera de las dos.
+
+Recomendamos un usuario solo para la tienda, con el tipo «Usuario interno» y el grupo **Ventas / Usuario: solo documentos propios** (`sales_team.group_sale_salesman`), sin grupos de Inventario. Ese usuario es el vendedor de los pedidos que crea la tienda y, con ese permiso, solo ve esos pedidos y no los de otros vendedores.
+
+### Con clave (Bearer)
+
+1. El usuario de la tienda entra a Odoo, abre **Preferencias → Seguridad de la cuenta → Nueva clave de API** y copia la clave. Odoo la muestra una sola vez. Dura hasta 90 días (el grupo «Usuario interno» permite ese máximo); al vencer hay que crear otra.
+2. La tienda manda la clave en cada llamada:
+
+   ```bash
+   curl -s -H "Authorization: Bearer <clave>" "https://<servidor>/api/v1/products?in_stock=true"
+   ```
+
+Si la llamada trae la cabecera `Authorization`, manda ella: una clave mala da 401 aunque también venga una cookie de sesión.
+
+### Con sesión (solo el GET)
 
 1. Abrir la sesión con `POST /web/session/authenticate` (JSON-RPC) y guardar la cookie `session_id` que devuelve:
 
@@ -26,7 +41,11 @@ La API usa la sesión de un usuario de Odoo (`auth='user'`). Recomendamos un usu
    curl -s -b cookies.txt "https://<servidor>/api/v1/products?in_stock=true"
    ```
 
-La sesión vence por inactividad. Si una consulta responde 303 o 404 (ver [Errores](#errores)), hay que repetir el paso 1.
+La sesión vence por inactividad. Si una consulta responde 401, hay que repetir el paso 1.
+
+### Varias bases de datos
+
+Si el servidor tiene varias bases y no tiene `db_filter`, una llamada sin cookie de sesión recibe un 404 de Odoo (sin JSON) antes de llegar a este módulo, porque no sabe en qué base buscar la ruta. Pasa en el entorno local. En producción se resuelve con `db_filter` (o `dbfilter` en `odoo.conf`) para que el servidor tenga una sola base visible; para probar en local, también sirve abrir una sesión en el navegador o arrancar con `--db-filter='^<base>$'`.
 
 ## `GET /api/v1/products`
 
@@ -69,6 +88,121 @@ No se aceptan otros parámetros, ni el mismo parámetro dos veces: responden 400
 
 Una lista vacía también es `200`: `{"count": 0, "products": []}`.
 
+## `POST /api/v1/orders`
+
+Crea un pedido para un cliente a partir del RIF y de los códigos de producto. Solo acepta la clave (ver [Conectarse](#conectarse)); la cookie de sesión no sirve.
+
+El pedido queda como **cotización** (`state: "draft"`), no confirmado. Ver [Supuestos](#supuestos).
+
+### Cuerpo
+
+`Content-Type: application/json`. Ejemplo:
+
+```json
+{
+  "customer_rif": "J-12345678-9",
+  "external_ref": "WEB-1001",
+  "lines": [
+    {"default_code": "TIENDA-001", "quantity": 2},
+    {"default_code": "TIENDA-002", "quantity": 1.5}
+  ]
+}
+```
+
+| Campo | Regla |
+|---|---|
+| `customer_rif` | Obligatorio. Una letra (V, E, J, P, G o C) y 9 dígitos. Admite guiones, puntos y espacios; da igual mayúscula o minúscula (`j-12345678-9`, `J123456789`). No se valida el dígito verificador. Se compara con el RIF de la ficha del cliente sin guiones, puntos ni espacios, y el pedido va a nombre de la empresa (si el RIF es de un contacto, la empresa a la que pertenece) |
+| `external_ref` | Obligatorio, texto no vacío. Se guarda en el campo «Referencia del cliente» del pedido |
+| `lines` | Obligatorio. Al menos una línea |
+| `lines[i].default_code` | Obligatorio. La referencia interna exacta del producto (mayúsculas y minúsculas cuentan). Solo productos activos y que se pueden vender, como en el GET |
+| `lines[i].quantity` | Obligatorio. Número mayor que 0, en la unidad de venta del producto. Admite decimales. Un texto (`"2"`) o `true` no sirven |
+
+**`default_code` en el POST, `code` en el GET.** Es el mismo dato: la referencia interna del producto. El GET lo devuelve como `code`; las líneas del POST lo piden como `default_code` (el nombre del campo en Odoo). La tienda toma el `code` del GET y lo manda como `default_code`.
+
+La tienda no manda precios: precios, impuestos y lista de precios los calcula Odoo según el cliente. Un campo que no esté en la tabla es un error (`INVALID_FIELD`), no se ignora. Dos líneas con el mismo código crean dos líneas en el pedido; no se suman.
+
+### Respuesta
+
+`201`, con `Content-Type: application/json`:
+
+```json
+{"id": 42, "name": "S00042", "state": "draft", "external_ref": "WEB-1001", "customer_id": 7, "amount_untaxed": 300.0, "amount_total": 348.0, "currency": "USD"}
+```
+
+| Campo | Qué es |
+|---|---|
+| `id` | Id del pedido en Odoo |
+| `name` | Número de la cotización |
+| `state` | `draft` (cotización) |
+| `external_ref` | La referencia que mandó la tienda |
+| `customer_id` | Id del cliente (la empresa) en Odoo |
+| `amount_untaxed`, `amount_total` | Montos calculados por Odoo, sin y con impuestos |
+| `currency` | Moneda del pedido |
+
+### Errores del POST
+
+Misma forma que en el GET. `field` es la ruta exacta del dato (`customer_rif`, `lines[1].quantity`, `lines[1].default_code`); el índice de las líneas empieza en 0. Hay un solo error por respuesta. Primero se revisa la forma de todo el cuerpo (de arriba abajo, y las líneas en orden); después se busca el cliente y luego los productos, línea por línea.
+
+| HTTP | `code` | `field` | Cuándo |
+|---|---|---|---|
+| 400 | `INVALID_JSON` | `null` | El cuerpo no es JSON o no es un objeto |
+| 401 | `UNAUTHORIZED` | `null` | Sin cabecera `Authorization`, con otro esquema (Basic), o con una clave inválida, vencida, borrada o de un usuario archivado. Lleva `WWW-Authenticate: Bearer` |
+| 403 | `FORBIDDEN` | `null` | Clave válida de un usuario del portal, o de un usuario sin permiso para crear pedidos |
+| 405 | `METHOD_NOT_ALLOWED` | `null` | Método distinto de POST (con cabecera `Allow: POST`) |
+| 422 | `REQUIRED_FIELD` | el campo | El campo falta, es `null` o viene vacío, o `lines` no trae líneas |
+| 422 | `INVALID_FIELD` | el campo | Tipo o formato inválido: RIF mal escrito, cantidad `"2"` o `true`, campo desconocido |
+| 422 | `CUSTOMER_NOT_FOUND` | `customer_rif` | No hay ningún cliente con ese RIF |
+| 422 | `PRODUCT_NOT_FOUND` | `lines[i].default_code` | No hay ningún producto vendible con ese código |
+| 422 | `INVALID_QUANTITY` | `lines[i].quantity` | Cero, negativa, o que queda en 0 al redondear a la precisión de la unidad de venta |
+| 422 | `AMBIGUOUS_REFERENCE` | `customer_rif` o `lines[i].default_code` | Más de un cliente con ese RIF o más de un producto con ese código |
+| 500 | `INTERNAL_ERROR` | `null` | Error inesperado. Si la llamada alcanzó a escribir algo, se deshace: no queda un pedido a medias |
+
+Los errores 4xx son de la tienda y se corrigen; un 422 repetido con el mismo cuerpo siempre da el mismo resultado. Un 500 se puede reintentar más tarde, pero ver la limitación sobre reintentos.
+
+### Ejemplos
+
+Con una clave de ejemplo (`0000…` no es una clave real) y una base con los datos de [Cómo probarlo](#cómo-probarlo):
+
+```bash
+curl -s -X POST http://localhost:8069/api/v1/orders \
+  -H "Authorization: Bearer 0000000000000000000000000000000000000000" \
+  -H "Content-Type: application/json" \
+  -d '{"customer_rif": "J-12345678-9", "external_ref": "WEB-1001", "lines": [{"default_code": "TIENDA-001", "quantity": 2}, {"default_code": "TIENDA-002", "quantity": 1.5}]}'
+# 201 {"id": 42, "name": "S00042", "state": "draft", "external_ref": "WEB-1001", "customer_id": 7, "amount_untaxed": 300.0, "amount_total": 348.0, "currency": "USD"}
+
+curl -s -X POST http://localhost:8069/api/v1/orders \
+  -H "Authorization: Bearer 0000000000000000000000000000000000000000" \
+  -H "Content-Type: application/json" \
+  -d '{"customer_rif": "J-12345678-9", "external_ref": "WEB-1002", "lines": [{"default_code": "TIENDA-001", "quantity": 1}, {"default_code": "ABC-123", "quantity": 1}]}'
+# 422 {"error": {"code": "PRODUCT_NOT_FOUND", "field": "lines[1].default_code", "message": "No existe un producto con el código ABC-123"}}
+
+curl -s -X POST http://localhost:8069/api/v1/orders \
+  -H "Authorization: Bearer 0000000000000000000000000000000000000000" \
+  -H "Content-Type: application/json" \
+  -d '{"customer_rif": "J-12345678-9", "external_ref": "WEB-1003", "lines": [{"default_code": "TIENDA-001", "quantity": "2"}]}'
+# 422 {"error": {"code": "INVALID_FIELD", "field": "lines[0].quantity", "message": "lines[0].quantity debe ser un número, no un texto ni un booleano."}}
+
+curl -s -X POST http://localhost:8069/api/v1/orders -H "Content-Type: application/json" -d '{}'
+# 401 {"error": {"code": "UNAUTHORIZED", "field": null, "message": "Credenciales ausentes o inválidas. Mande la clave en la cabecera Authorization: Bearer."}}
+```
+
+Estos ejemplos muestran el formato que define el contrato; las respuestas con números de pedido son ilustrativas hasta que se corran contra Odoo (ver [Cómo se verificó](#cómo-se-verificó-tramo-b)).
+
+## Registro de llamadas
+
+Cada llamada a `GET /api/v1/products` y a `POST /api/v1/orders` deja una fila en el modelo `shop.api.log`, buena o mala, incluidas las que fallan por falta de credenciales.
+
+| Campo | Qué guarda |
+|---|---|
+| Endpoint | Método y ruta, sin la consulta (`POST /api/v1/orders`) |
+| Usuario | Dueño de la clave o de la sesión. Vacío si no se autenticó |
+| Código HTTP | El código de la respuesta |
+| Duración (ms) | Desde que la llamada entra al módulo hasta que se arma la respuesta |
+| Código de error | El `code` del error. Vacío si salió bien |
+| Fecha | Fecha y hora de la llamada |
+
+No guarda cabeceras, cuerpo, consulta ni IP, así que la clave y los datos del cliente no llegan al log. Lo leen solo los administradores, en **Ajustes → Técnico → Llamadas a la API de la tienda** (el menú Técnico aparece con el modo desarrollador activado). Nadie lo edita desde la interfaz. Quien llama a la API no puede leerlo ni escribirlo; el módulo crea cada fila con `sudo()`, solo para eso.
+
 ## Errores
 
 Los errores en JSON tienen siempre esta forma:
@@ -84,13 +218,15 @@ Los errores en JSON tienen siempre esta forma:
 | HTTP | `code` | Cuándo | Qué hacer |
 |---|---|---|---|
 | 400 | `INVALID_PARAMETER` | Un parámetro con formato inválido, una categoría que no existe, un parámetro desconocido o repetido | Corregir la consulta: `field` dice cuál |
+| 401 | `UNAUTHORIZED` | Ni clave ni sesión válidas (ver [Conectarse](#conectarse)). Lleva la cabecera `WWW-Authenticate: Bearer` | Mandar la clave, o abrir la sesión de nuevo |
 | 403 | `FORBIDDEN` | El usuario no es interno (por ejemplo, un usuario del portal) o le falta un permiso | Usar el usuario de la tienda |
-| 405 | (sin JSON) | Un método distinto de GET | Usar GET |
-| 303 | (sin JSON) | Sin sesión válida, en un servidor con una sola base o con filtro de bases: Odoo redirige a `/web/login` | Volver a abrir la sesión |
-| 404 | (sin JSON) | Sin sesión válida, en un servidor con varias bases sin filtro: Odoo no sabe en qué base buscar la ruta | Volver a abrir la sesión |
+| 405 | `METHOD_NOT_ALLOWED` | Un método distinto de GET | Usar GET |
+| 404 | (sin JSON) | Servidor con varias bases sin `db_filter` y sin cookie de sesión: Odoo no sabe en qué base buscar la ruta | Ver [Varias bases de datos](#varias-bases-de-datos) |
 | 500 | `INTERNAL_ERROR` | Un error inesperado del servidor. La respuesta no trae detalles; la traza queda en el registro de Odoo | Reintentar más tarde y avisar si se repite |
 
-Un dato mal escrito por la tienda nunca da 500. El 405, el 303 y el 404 los responde Odoo antes de llegar a este módulo, por eso no traen el JSON de error.
+Un dato mal escrito por la tienda nunca da 500. El 404 de las varias bases lo responde Odoo antes de llegar a este módulo, por eso no trae el JSON de error. El mensaje del 401 no dice si la clave existe.
+
+El GET registra todas sus llamadas en el log (ver [Registro de llamadas](#registro-de-llamadas)). Filtros, respuesta y errores del GET son los mismos del tramo A, salvo el 303 que ahora es 401 y el 405 que ahora trae JSON.
 
 ## Ejemplos
 
@@ -117,6 +253,11 @@ curl -s -b cookies.txt "http://localhost:8069/api/v1/products?categ=7"
 - Los productos se buscan con los permisos del usuario de la API, así que las reglas de Odoo (por ejemplo, la de multicompañía) siguen aplicando.
 - La cantidad libre se calcula con `sudo()`, solo sobre los productos ya encontrados. Odoo calcula esa cantidad leyendo los movimientos de inventario (`stock.move`), y leerlos pide el grupo Inventario / Usuario. Con `sudo()` el usuario de la tienda no necesita ese grupo: si sus credenciales se filtran, no sirven para mover inventario. Lo fija la prueba `test_api_user_has_no_inventory_rights`.
 - Las compañías del cálculo siguen siendo las del usuario de la API.
+- La clave se verifica con `res.users.apikeys` de Odoo: se guarda cifrada, vence y se crea desde las preferencias del usuario. No se usa `auth='bearer'` de Odoo porque rechaza la clave mala con un 401 en texto plano, sin el JSON acordado y sin dejar la llamada en el log. Las rutas van con `auth='none'`, `csrf=False` y `readonly=False` y hacen la verificación ellas mismas.
+- `csrf=False` es seguro porque la clave viaja en una cabecera que el navegador no agrega solo. Por eso el POST no acepta la cookie de sesión: con la cookie, otra página web podría crear pedidos con la sesión abierta de quien navega.
+- El pedido se crea con los permisos del usuario de la tienda (no con `sudo()`). El vendedor del pedido es ese usuario, porque con «solo documentos propios» Odoo no deja crear un pedido cuyo vendedor sea otro, y el vendedor por defecto sería el del cliente. Quien revise la cotización puede cambiar el vendedor.
+- `sudo()` también se usa para dos cosas más, ambas acotadas: ver si el dueño de la clave sigue activo, y crear la fila del log.
+- La lógica de cada llamada corre dentro de un savepoint: si algo falla se deshace lo escrito y el log se escribe igual.
 
 ## Cómo probarlo
 
@@ -139,6 +280,8 @@ Las pruebas (`tests/test_products_api.py`) llaman a la API por HTTP con un usuar
 | Acceso | `test_requires_session`, `test_portal_user_forbidden`, `test_access_error_is_forbidden`, `test_only_get`, `test_api_user_has_no_inventory_rights` |
 | Error inesperado sin detalles | `test_unexpected_error_is_json_without_details` |
 
+Las pruebas del tramo B están en `tests/test_orders_api.py` (POST, claves, permisos, log) y en `tests/test_products_api.py` (GET con clave o sesión).
+
 A mano, en la base local `sia_navegador` (solo local, no se entrega). Usuarios: `tienda`/`tienda` (usuario de la API), `portal`/`portal` y `admin`/`admin`. Productos:
 
 | id | Referencia | Producto | Categoría | Libre | Notas |
@@ -154,7 +297,7 @@ A mano, en la base local `sia_navegador` (solo local, no se entrega). Usuarios: 
 
 Todos con fecha de modificación 2026-10-01 00:00:00 UTC.
 
-## Cómo se verificó
+## Cómo se verificó (tramo A)
 
 - Pruebas en una base nueva: `0 failed, 0 error(s) of 18 tests`.
 - Antes de escribir el controlador, las 15 pruebas de entonces fallaban con 404 (la ruta no existía).
@@ -196,3 +339,53 @@ Todos con fecha de modificación 2026-10-01 00:00:00 UTC.
 - Si el servidor tiene varias bases sin filtro, sin sesión responde 404 y no 303 (ver [Errores](#errores)).
 - El catálogo sale completo en una sola respuesta, sin paginación.
 - Los parámetros se aceptan solo como están escritos aquí: `in_stock=True` o `in_stock=1` responden 400. También responden 400 el parámetro que algunos clientes HTTP agregan para evitar la caché (`_=`) y `debug=1`.
+
+## Tramo B: supuestos, limitaciones y preguntas
+
+### Supuestos
+
+- **El pedido queda como cotización (`draft`).** Un vendedor revisa el precio, la lista de precios y el pago antes de confirmar; la tienda no confirma sola. Además, la cotización no pasa por la confirmación de `sale_commission`, y si algo sale mal basta con cancelarla.
+- **El stock no se reserva hasta confirmar.** Por eso la cantidad que devuelve el GET no baja con los pedidos de la tienda, y la última unidad podría venderse dos veces (ver la primera pregunta).
+- **El usuario de la tienda es el vendedor del pedido** y tiene «solo documentos propios». Con eso Odoo le deja crear el pedido y la clave solo ve los pedidos de la tienda.
+- **El RIF se compara normalizado** (sin guiones, puntos ni espacios, en mayúscula) contra el campo `vat` del cliente, que Odoo guarda tal como se escribió. No se valida el dígito verificador. Los contactos de una empresa copian el RIF de la empresa: cuentan como la misma empresa, no como un cliente repetido. Dos empresas con el mismo RIF dan `AMBIGUOUS_REFERENCE`.
+- **Dos líneas con el mismo código crean dos líneas** en el pedido; no se suman.
+- **El GET con clave devuelve lo mismo que con sesión.** Si viene la cabecera `Authorization`, se usa la clave y no se cae a la sesión.
+- Para el cálculo de si la cantidad «queda en 0», se usa el redondeo de la unidad de medida del producto (por ejemplo, 0.4 cajas en una unidad que redondea a enteros).
+
+### Limitaciones conocidas
+
+- **La referencia externa no es única:** si la tienda reintenta un pedido (por ejemplo, tras un corte de red antes de recibir la respuesta), se crea otro pedido con la misma `external_ref`. El tramo C lo resuelve con `Idempotency-Key`.
+- **El log no se depura solo.** Crece con cada llamada hasta que alguien lo limpie.
+- **No hay límite de llamadas por minuto.**
+- La clave dura hasta 90 días y hay que renovarla a mano antes de que venza; no hay aviso.
+- El cliente se busca con una consulta SQL que filtra por RIF normalizado y otra con el ORM que aplica las reglas de acceso del usuario de la tienda; los productos, con una sola búsqueda para todas las líneas.
+
+### Preguntas al cliente
+
+1. El stock no se reserva hasta que un vendedor confirma la cotización, así que la última unidad podría venderse dos veces. ¿Es aceptable, o la tienda debe descontarla de su propio inventario, o las cotizaciones deben reservar stock?
+2. Los productos sin referencia interna no se pueden pedir (el POST pide el código). ¿Hay productos vendibles sin referencia que la tienda necesite pedir?
+3. ¿Cuánto tiempo se guarda el log de llamadas, y quién lo depura?
+4. ¿Quién revisa las cotizaciones de la tienda y confirma el pago?
+
+## Cómo se verificó (tramo B)
+
+**Pendiente.** Esta sección se completa cuando se ejecuten las pruebas en Odoo. Hasta ahora solo se revisó el código y se pasó un análisis estático básico (errores de sintaxis y nombres sin definir con `ruff`); no se corrió Odoo, así que ninguna prueba del tramo B se ha ejecutado.
+
+Por completar:
+
+- [ ] Pruebas en una base nueva: `./odoo test -i prueba-tecnica -d <base_nueva> -m shop_integration_api`, y el resultado de la línea `... of N tests`.
+- [ ] Las pruebas nuevas fallando antes del código (commit de pruebas solo).
+- [ ] Ejemplos de `curl` de este README contra Odoo en marcha, con una clave real de prueba.
+- [ ] Instalación en una base nueva sin `WARNING` ni `ERROR` del módulo, y vista del log en **Ajustes → Técnico**.
+- [ ] Prueba en el navegador: crear la clave en las preferencias, crear un pedido con `curl`, ver la cotización en Ventas y las filas en el log.
+- [ ] Comprobar con la versión de Odoo usada: `res.users.apikeys._check_credentials` y `_generate`, `request.update_env`, `Model.has_access` y el parámetro `readonly` de la ruta.
+
+### Pasos de prueba en el navegador
+
+1. Instalar o actualizar el módulo (`-u shop_integration_api`) en una base con los módulos `sale` y `stock`.
+2. Crear el usuario de la tienda: usuario interno con **Ventas / Usuario: solo documentos propios**, y ponerle contraseña.
+3. Entrar como ese usuario → **Preferencias → Seguridad de la cuenta → Nueva clave de API** y copiar la clave.
+4. Crear un cliente con RIF `J-12345678-9` y productos con referencia interna `TIENDA-001` y `TIENDA-002`.
+5. Si el servidor tiene varias bases, arrancar con `--db-filter='^<base>$'` (ver [Varias bases de datos](#varias-bases-de-datos)).
+6. Correr los `curl` de [Ejemplos](#ejemplos) con la clave y abrir **Ventas → Cotizaciones**: la cotización debe aparecer con la referencia del cliente `WEB-1001` y el usuario de la tienda como vendedor.
+7. Como administrador, abrir **Ajustes → Técnico → Llamadas a la API de la tienda** (con modo desarrollador) y ver una fila por llamada.
