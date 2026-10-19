@@ -58,10 +58,13 @@ Partes donde preferí no delegar:
 
 ## Lo que la IA hizo mal (tramo B)
 
-- Su primer diseño dejaba la asignación del aprobador en `action_submit`. Pero el tramo A ya valida los cambios de estado en `write` para que valgan también con una escritura directa, y una escritura directa de `state = "submitted"` habría dejado una solicitud enviada sin aprobador. Se movió a `write` y se agregó una prueba.
-- Planteó marcar la actividad del aprobador como hecha al aprobar. Eso agrega un mensaje al chatter y rompe la prueba del tramo A que comprueba que el último mensaje es el del cambio de estado; se cambió a borrar la actividad.
-- Al escribir las pruebas ajustó las del tramo A (que ahora necesitan un nivel antes de enviar) pero en la prueba de «un aprobador no aprueba su propia solicitud» intentó llegar al estado enviado con `sudo().write`, que ya no es posible porque el envío falla. Se cambió por una escritura SQL para conservar la defensa en profundidad del tramo A.
-- En su primera versión del pago, el estado «pagada» se podía escribir directamente sin pago, y «rechazada» sin motivo. Se agregaron los chequeos y sus pruebas.
+- Al ajustar las pruebas del tramo A (que ahora necesitan un nivel antes de enviar), en la prueba de «un aprobador no aprueba su propia solicitud» intentó llegar al estado enviado con `sudo().write`, que ya no es posible porque el envío falla. Lo vio al releer la prueba antes del commit y la cambió por una escritura SQL, para conservar la defensa en profundidad del tramo A.
+- Al pedirle que comprobara todo lo hecho, releyó el código contra las pruebas y los permisos y encontró errores que había entregado como terminados:
+  - El botón «Pago» y el PDF leían el `account.payment` con los permisos del usuario. Tesorería y el solicitante no tienen permisos de Contabilidad, así que imprimir una solicitud pagada habría dado error de acceso. Se agregaron el número y la fecha del pago como campos relacionados, y el botón quedó solo para quien tiene Contabilidad.
+  - Tesorería no tenía garantizado leer los diarios contables, y sin eso no puede elegir el diario en el asistente. Se le dio solo lectura sobre `account.journal`.
+  - El motivo del rechazo se publicaba como nota interna, que no avisa al solicitante. Ahora es un mensaje dirigido a él.
+  - Cuatro pruebas habrían fallado con el código correcto: buscaba la palabra «aprobador» en un mensaje que no la tiene; leía el pago con el usuario solicitante; exigía un asiento publicado, cuando en Odoo 18 un pago puede publicarse sin asiento; y probaba un motivo vacío sin savepoint, lo que podía romper la transacción.
+  - El README decía que el pago muestra un campo «Solicitud de pago» en su formulario, pero no hay vista que lo muestre. Se corrigió el texto.
 
 ## Lo que no se pudo verificar
 

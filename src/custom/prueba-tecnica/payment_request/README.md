@@ -28,8 +28,8 @@ Ejercicio 4 de la prueba técnica. Hoy las solicitudes de pago a proveedores lle
 - **Niveles de aprobación** (`payment.approval.level`): cada nivel tiene un monto mínimo y un aprobador. Los configura el administrador en **Solicitudes de pago → Configuración → Niveles de aprobación**. Ejemplo: «Jefe de área» desde 0 y «Gerencia» desde 1.000.
 - **Al enviar**, el sistema elige el nivel con el mayor monto mínimo que no supere el monto de la solicitud. El monto se compara en la moneda de la compañía (si la solicitud está en otra moneda, se convierte con la tasa de la fecha de la solicitud). El aprobador del nivel queda asignado a la solicitud y recibe una actividad «Por hacer» para revisarla. Si los niveles cambian después, el aprobador ya asignado no cambia.
 - **Solo el aprobador asignado** aprueba o rechaza. Otro usuario con el grupo Aprobador recibe un error. Al aprobar queda registrado quién y cuándo, y la actividad se cierra.
-- **Rechazo con motivo:** el botón «Rechazar» abre un asistente con el motivo obligatorio. El motivo queda en el campo de la solicitud y en el chatter, donde el solicitante lo ve.
-- **Pago:** el botón «Marcar como pagada» abre un asistente donde Tesorería elige el diario (banco o caja) y la fecha. Crea un `account.payment` de proveedor, saliente, por el monto y la moneda de la solicitud, lo publica y deja la solicitud como pagada. El pago queda vinculado: botón «Pago» en la solicitud y campo «Solicitud de pago» en el pago. No se puede pagar dos veces.
+- **Rechazo con motivo:** el botón «Rechazar» abre un asistente con el motivo obligatorio. El motivo queda en el campo de la solicitud y en un mensaje del chatter dirigido al solicitante, que recibe el aviso.
+- **Pago:** el botón «Marcar como pagada» abre un asistente donde Tesorería elige el diario (banco o caja) y la fecha. Crea un `account.payment` de proveedor, saliente, por el monto y la moneda de la solicitud, lo publica y deja la solicitud como pagada. El pago queda vinculado: la solicitud muestra el número y la fecha del pago a cualquiera que la pueda ver, y quien tiene permisos de Contabilidad (Facturación o solo lectura) tiene además el botón «Pago» para abrirlo. El pago guarda la solicitud en el campo `payment_request_id` (no se muestra en el formulario del pago). No se puede pagar dos veces.
 - **Reporte PDF** (QWeb), botón «Imprimir» en solicitudes aprobadas o pagadas: número, fecha, proveedor, concepto, monto y moneda, solicitante, quién aprobó y cuándo, y el pago si ya se hizo.
 
 ### Casos límite que el envío rechaza con un mensaje claro
@@ -44,6 +44,8 @@ Ejercicio 4 de la prueba técnica. Hoy las solicitudes de pago a proveedores lle
 - El aprobador, la fecha de aprobación, el motivo del rechazo y el pago son campos del sistema: ningún usuario los escribe, ni por la interfaz ni llamando al ORM. Solo los escribe el propio módulo, con `sudo()` acotado a ese campo y con un comentario que lo explica.
 - El cambio de estado se valida en `write`, igual que en el tramo A: `write({"state": "rejected"})` sin motivo, o `write({"state": "paid"})` sin pago, también fallan. Y `write({"state": "submitted"})` también asigna el aprobador, así que ninguna ruta deja una solicitud enviada sin aprobador.
 - El pago usa `sudo()` solo para crear y publicar ese `account.payment`: Tesorería no tiene permisos de Contabilidad y no se los damos. Todo ocurre en la misma transacción; si publicar el pago falla, la solicitud sigue aprobada.
+- Tesorería recibe solo permiso de lectura sobre los diarios contables (`account.journal`), para poder elegir el diario en el asistente de pago.
+- El número y la fecha del pago se leen con campos relacionados, que Odoo calcula como superusuario. Así el formulario y el PDF los muestran a quien no tiene permisos de Contabilidad, sin darle acceso al pago.
 - Los niveles los lee cualquier solicitante (el envío los consulta) y solo los cambia el administrador del sistema.
 
 ## Qué se reusa de Odoo
@@ -104,9 +106,9 @@ A mano: con un usuario por grupo (Solicitante, Aprobador, Tesorería), crear una
 | Solo el aprobador asignado aprueba | `test_only_assigned_approver_approves`, `test_approval_records_who_and_when` |
 | Los campos del sistema no se escriben a mano | `test_system_fields_cannot_be_written_by_users` |
 | Rechazo con motivo y chatter | `test_reject_opens_wizard_only_for_assigned_approver`, `test_reject_requires_reason`, `test_reject_stores_reason_and_notifies_in_chatter`, `test_wizard_reject_by_unassigned_approver_fails`, `test_reject_state_needs_reason` |
-| Pago vinculado, sin pago doble y todo o nada | `test_pay_creates_vendor_payment_linked_to_request`, `test_treasury_pays_without_accounting_groups`, `test_cannot_pay_twice`, `test_can_only_pay_approved`, `test_paid_state_needs_payment`, `test_pay_is_all_or_nothing`, `test_view_payment_action` |
+| Pago vinculado, sin pago doble y todo o nada | `test_pay_creates_vendor_payment_linked_to_request`, `test_treasury_pays_without_accounting_groups`, `test_cannot_pay_twice`, `test_can_only_pay_approved`, `test_paid_state_needs_payment`, `test_pay_is_all_or_nothing`, `test_view_payment_action`, `test_buttons_by_group_and_state` (botón «Pago» solo con Contabilidad) |
 | Asistentes por grupo | `test_wizards_are_limited_to_their_group` |
-| Reporte con aprobador y fecha | `test_report_shows_approver_and_date` |
+| Reporte con aprobador y fecha, también impreso por el solicitante | `test_report_shows_approver_and_date`, `test_requester_prints_paid_request` |
 | Vistas | `test_levels_and_wizard_views_exist` |
 
 Las pruebas del tramo A se ajustaron: ahora crean un nivel general antes de enviar, y rechazan y pagan por los asistentes.
@@ -195,6 +197,7 @@ Por completar:
 - El aprobador de un nivel puede dejar de serlo (por ejemplo, se va de la empresa): las solicitudes ya asignadas a él quedan esperándolo. No hay reasignación; hoy habría que rechazar y volver a crear la solicitud.
 - El pago se crea siempre en la moneda de la solicitud; si el diario no admite esa moneda, Odoo lo avisa al publicar y la solicitud sigue aprobada.
 - El reporte no permite imprimir borradores ni enviadas: el botón solo aparece en solicitudes aprobadas o pagadas.
+- Tesorería registra el pago pero, sin permisos de Contabilidad, no puede abrirlo: ve su número y su fecha en la solicitud. Para abrirlo hace falta Facturación o Contabilidad de solo lectura.
 - Un aprobador ve los borradores de otros, pero no puede editarlos ni enviarlos.
 - Un aprobador o Tesorería puede borrar sus propios borradores, como cualquier solicitante, pero no los de otros.
 - Odoo no impide asignar Aprobador y Tesorería a la misma persona. Esa separación depende de quien administra los usuarios.

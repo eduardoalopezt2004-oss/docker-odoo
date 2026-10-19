@@ -45,7 +45,9 @@
                 </header>
                 <sheet>
                     <div class="oe_button_box" name="button_box">
+                        <!-- Abrir el pago pide permisos de Contabilidad; el número se ve en el formulario igual. -->
                         <button name="action_view_payment" type="object" class="oe_stat_button" icon="fa-money"
+                                groups="account.group_account_invoice,account.group_account_readonly"
                                 invisible="not payment_id">
                             <div class="o_stat_info">
                                 <span class="o_stat_text">Pago</span>
@@ -68,7 +70,9 @@
                             <field name="currency_id" readonly="state != 'draft'" options="{'no_create': True}"/>
                             <field name="date" readonly="state != 'draft'"/>
                             <field name="approval_date" invisible="not approval_date"/>
-                            <field name="payment_id" invisible="not payment_id"/>
+                            <field name="payment_id" invisible="1"/>
+                            <field name="payment_name" invisible="not payment_id"/>
+                            <field name="payment_date" invisible="not payment_id"/>
                         </group>
                     </group>
                     <group invisible="state != 'rejected'">

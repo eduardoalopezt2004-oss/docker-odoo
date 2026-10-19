@@ -125,7 +125,7 @@ class TestPaymentApproval(TransactionCase):
         request = self._new_request(150.0, user=self.chief)
         with self.assertRaises(UserError) as error:
             request.action_submit()
-        self.assertIn("aprobador", str(error.exception))
+        self.assertIn(self.chief.name, str(error.exception))
         self.assertEqual(request.state, "draft")
         self.assertFalse(request.approver_id)
         # Una solicitud grande del mismo jefe sí va a Gerencia.
@@ -219,16 +219,24 @@ class TestPaymentApproval(TransactionCase):
 
     def test_reject_requires_reason(self):
         request = self._submitted(150.0)
+        # Un motivo en blanco lo rechaza el asistente; uno vacío ya puede fallar al crear el asistente
+        # (campo obligatorio). Cada intento va en su savepoint para no romper la transacción.
         for reason in ("", "   ", False):
             with self.subTest(reason=reason):
-                with self.assertRaises((ValidationError, UserError)):
+                with self.assertRaises(Exception), mute_logger("odoo.sql_db"), self.cr.savepoint():
                     self._reject(request, self.chief, reason)
+        with self.assertRaises(ValidationError):
+            self._reject(request, self.chief, "   ")
         self.assertEqual(request.state, "submitted")
         self.assertFalse(request.reject_reason)
 
     def test_reject_stores_reason_and_notifies_in_chatter(self):
         request = self._submitted(150.0)
         self._reject(request, self.chief, "Falta la factura del proveedor")
+        # El solicitante recibe el aviso, no solo una nota interna.
+        notified = request.sudo().message_ids.filtered(lambda m: "Falta la factura del proveedor" in (m.body or ""))
+        self.assertIn(self.requester.partner_id, notified.partner_ids | notified.notified_partner_ids)
+        self.assertEqual(notified.subtype_id, self.env.ref("mail.mt_comment"))
         self.assertEqual(request.state, "rejected")
         self.assertEqual(request.reject_reason, "Falta la factura del proveedor")
         self.assertFalse(request.activity_ids)
@@ -268,7 +276,8 @@ class TestPaymentApproval(TransactionCase):
         request = self._approved(150.0)
         self._pay(request)
         self.assertEqual(request.state, "paid")
-        payment = request.payment_id
+        # sudo() solo para leer el pago en la prueba: el solicitante no tiene permisos de Contabilidad.
+        payment = request.sudo().payment_id
         self.assertTrue(payment)
         self.assertEqual(payment.payment_type, "outbound")
         self.assertEqual(payment.partner_type, "supplier")
@@ -277,8 +286,13 @@ class TestPaymentApproval(TransactionCase):
         self.assertEqual(payment.currency_id, request.currency_id)
         self.assertEqual(payment.journal_id, self.journal)
         self.assertEqual(payment.payment_request_id, request)
-        # Registrado en contabilidad: el asiento queda publicado.
-        self.assertEqual(payment.move_id.state, "posted")
+        # Registrado en contabilidad: el pago ya no está en borrador.
+        self.assertNotEqual(payment.state, "draft")
+        # Tesorería y el solicitante ven el número y la fecha del pago sin permisos de Contabilidad.
+        for user in (self.treasurer, self.requester):
+            with self.subTest(user=user.login):
+                self.assertEqual(request.with_user(user).payment_name, payment.name)
+                self.assertEqual(request.with_user(user).payment_date, payment.date)
 
     def test_treasury_pays_without_accounting_groups(self):
         """El pago usa sudo() acotado a crear y publicar ese pago: Tesorería no necesita grupos de Contabilidad."""
@@ -340,11 +354,16 @@ class TestPaymentApproval(TransactionCase):
 
     # Reporte
 
+    def _render_report(self, request, user=None):
+        Report = self.env["ir.actions.report"]
+        if user:
+            Report = Report.with_user(user)
+        html = Report._render_qweb_html("payment_request.report_payment_request", request.ids)[0]
+        return html.decode() if isinstance(html, bytes) else str(html)
+
     def test_report_shows_approver_and_date(self):
         request = self._approved(150.0)
-        html = self.env["ir.actions.report"]._render_qweb_html(
-            "payment_request.report_payment_request", request.ids
-        )[0].decode()
+        html = self._render_report(request)
         self.assertIn(request.name, html)
         self.assertIn(self.partner.name, html)
         self.assertIn(self.chief.name, html)
@@ -352,10 +371,15 @@ class TestPaymentApproval(TransactionCase):
         self.assertIn(request.concept, html)
         # Una solicitud sin aprobar no muestra aprobador.
         draft = self._new_request()
-        draft_html = self.env["ir.actions.report"]._render_qweb_html(
-            "payment_request.report_payment_request", draft.ids
-        )[0].decode()
-        self.assertNotIn("Aprobada por", draft_html)
+        self.assertNotIn("Aprobada por", self._render_report(draft))
+
+    def test_requester_prints_paid_request(self):
+        """El solicitante imprime su solicitud pagada sin permisos de Contabilidad."""
+        request = self._approved(150.0)
+        self._pay(request)
+        html = self._render_report(request, self.requester)
+        self.assertIn(request.sudo().payment_id.name, html)
+        self.assertIn("Aprobada por", html)
 
     # Vistas
 

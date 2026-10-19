@@ -50,6 +50,10 @@ class PaymentRequest(models.Model):
     approval_date = fields.Datetime(string="Fecha de aprobación", readonly=True, copy=False)
     reject_reason = fields.Text(string="Motivo del rechazo", readonly=True, copy=False)
     payment_id = fields.Many2one("account.payment", string="Pago", readonly=True, copy=False)
+    # Número y fecha del pago para el formulario y el PDF. Los campos relacionados se leen como
+    # superusuario: así los ve quien no tiene permisos de Contabilidad (Tesorería, el solicitante).
+    payment_name = fields.Char(related="payment_id.name", string="Número del pago")
+    payment_date = fields.Date(related="payment_id.date", string="Fecha del pago")
     state = fields.Selection(
         [
             ("draft", "Borrador"),
@@ -206,7 +210,12 @@ class PaymentRequest(models.Model):
         self._check_state_change("rejected", final=False)
         # sudo() solo para escribir el motivo: es un campo del sistema, ningún usuario lo escribe.
         self.sudo().write({"reject_reason": reason})
-        self.message_post(body=_("Solicitud rechazada. Motivo: %s", reason), subtype_xmlid="mail.mt_note")
+        # Mensaje y no nota: así el solicitante recibe el aviso con el motivo.
+        self.message_post(
+            body=_("Solicitud rechazada. Motivo: %s", reason),
+            subtype_xmlid="mail.mt_comment",
+            partner_ids=self.requester_id.partner_id.ids,
+        )
         self.write({"state": "rejected"})
 
     def _pay(self, journal, payment_date):

@@ -279,20 +279,14 @@ class TestPaymentRequest(TransactionCase):
         approve = "state != 'submitted' or approver_id != uid"
         reject = "state != 'submitted' or approver_id != uid"
         pay = "state != 'approved'"
-        view_payment = "not payment_id"
-        self.assertEqual(
-            self._form_buttons(self.requester), {"action_submit": submit, "action_view_payment": view_payment}
-        )
+        # Ninguno de estos usuarios tiene permisos de Contabilidad: no ven el botón para abrir el pago.
+        self.assertEqual(self._form_buttons(self.requester), {"action_submit": submit})
         self.assertEqual(
             self._form_buttons(self.approver),
-            {
-                "action_submit": submit,
-                "action_approve": approve,
-                "action_reject": reject,
-                "action_view_payment": view_payment,
-            },
+            {"action_submit": submit, "action_approve": approve, "action_reject": reject},
         )
-        self.assertEqual(
-            self._form_buttons(self.treasurer),
-            {"action_submit": submit, "action_mark_paid": pay, "action_view_payment": view_payment},
+        self.assertEqual(self._form_buttons(self.treasurer), {"action_submit": submit, "action_mark_paid": pay})
+        accountant = self._create_user(
+            "contabilidad_test", self.env.ref("base.group_user") | self.env.ref("account.group_account_invoice")
         )
+        self.assertEqual(self._form_buttons(accountant).get("action_view_payment"), "not payment_id")

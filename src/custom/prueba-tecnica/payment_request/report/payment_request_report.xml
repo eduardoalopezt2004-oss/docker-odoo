@@ -47,9 +47,9 @@
                             Aprobada por <strong t-field="doc.approver_id"/>
                             el <span t-field="doc.approval_date"/>.
                         </p>
-                        <p t-if="doc.payment_id">
-                            Pago registrado: <span t-field="doc.payment_id.name"/>
-                            (<span t-field="doc.payment_id.date"/>).
+                        <p t-if="doc.payment_name">
+                            Pago registrado: <span t-field="doc.payment_name"/>
+                            (<span t-field="doc.payment_date"/>).
                         </p>
                     </div>
                 </t>
