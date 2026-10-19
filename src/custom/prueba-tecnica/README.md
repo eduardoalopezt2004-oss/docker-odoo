@@ -43,7 +43,7 @@ Cada ejercicio se trabajó en su propia rama y se integró con un pull request (
 
 El comando termina con código 0 aunque haya pruebas con error: hay que leer la línea `... of N tests` del final.
 
-Resultado de los cuatro módulos juntos en una base nueva de Odoo 18.0: `0 failed, 0 error(s) of 134 tests`.
+Resultado de los cuatro módulos juntos en una base nueva de Odoo 18.0: `0 failed, 0 error(s) of 136 tests`.
 
 ## Supuestos del entorno
 
