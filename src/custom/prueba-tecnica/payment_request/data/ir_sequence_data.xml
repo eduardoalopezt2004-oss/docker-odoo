@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo noupdate="1">
+    <!-- SP/2026/0001: el contador vuelve a 0001 cada año. -->
+    <record id="seq_payment_request" model="ir.sequence">
+        <field name="name">Solicitud de pago</field>
+        <field name="code">payment.request</field>
+        <field name="prefix">SP/%(range_year)s/</field>
+        <field name="padding">4</field>
+        <field name="use_date_range" eval="True"/>
+        <field name="company_id" eval="False"/>
+    </record>
+</odoo>

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <menuitem id="payment_request_menu_root"
+              name="Solicitudes de pago"
+              groups="group_payment_requester"
+              sequence="60"/>
+
+    <menuitem id="payment_request_menu_requests"
+              name="Solicitudes"
+              parent="payment_request_menu_root"
+              action="payment_request_action"
+              sequence="10"/>
+</odoo>
