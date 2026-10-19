@@ -1,5 +1,8 @@
+import json
+from datetime import timedelta
 from unittest.mock import patch
 
+from odoo import fields
 from odoo.exceptions import AccessError
 from odoo.tests import HttpCase, new_test_user, tagged
 
@@ -266,10 +269,73 @@ class TestProductsApi(HttpCase):
 
     # Acceso y método
 
-    def test_requires_session(self):
+    def test_requires_credentials(self):
         response = self._get(login=None)
-        self.assertEqual(response.status_code, 303)
-        self.assertIn("/web/login", response.headers["Location"])
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.headers["Content-Type"], "application/json; charset=utf-8")
+        self.assertEqual(response.headers["WWW-Authenticate"], "Bearer")
+        error = response.json()["error"]
+        self.assertEqual((error["code"], error["field"]), ("UNAUTHORIZED", None))
+        self.assertTrue(error["message"])
+
+    def _get_with_key(self, key, query=""):
+        return self.url_open(
+            f"{API_URL}{query}", headers={"Authorization": f"Bearer {key}"}, allow_redirects=False
+        )
+
+    def test_key_works_like_session(self):
+        key = (
+            self.env["res.users.apikeys"]
+            .with_user(self.api_user)
+            ._generate("rpc", "tienda-prueba", fields.Datetime.now() + timedelta(days=30))
+        )
+        query = f"?category_id={self.categ_parent.id}&in_stock=true"
+        by_key = self._get_with_key(key, query)
+        self.assertEqual(by_key.status_code, 200, by_key.text)
+        by_session = self._get(query)
+        self.assertEqual(by_key.json(), by_session.json())
+        # Los errores de parámetros son los mismos con clave.
+        invalid = self._get_with_key(key, "?categ=1")
+        self.assertEqual(invalid.status_code, 400)
+        self.assertEqual(invalid.json()["error"]["code"], "INVALID_PARAMETER")
+
+    def test_invalid_key_is_unauthorized_even_with_session(self):
+        """Si viene la cabecera Authorization, manda ella: no se cae a la sesión."""
+        self.authenticate("shop_api_user", "shop_api_user")
+        response = self._get_with_key("0" * 40)
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.json()["error"]["code"], "UNAUTHORIZED")
+
+    def test_portal_key_forbidden(self):
+        key = (
+            self.env["res.users.apikeys"]
+            .with_user(self.portal_user)
+            # Sin grupo interno, Odoo limita las claves a 1 día.
+            ._generate("rpc", "tienda-prueba", fields.Datetime.now() + timedelta(hours=12))
+        )
+        response = self._get_with_key(key)
+        self.assertEqual(response.status_code, 403, response.text)
+        self.assertEqual(response.json()["error"]["code"], "FORBIDDEN")
+
+    def test_every_get_call_is_logged(self):
+        Log = self.env["shop.api.log"].sudo()
+        before = Log.search_count([])
+        self.assertEqual(self._get().status_code, 200)
+        self.assertEqual(self._get("?categ=1").status_code, 400)
+        self.assertEqual(self._get(login=None).status_code, 401)
+        logs = Log.search([], order="id desc", limit=3)
+        self.assertEqual(Log.search_count([]), before + 3)
+        self.assertEqual(
+            [(log.endpoint, log.status_code, log.error_code) for log in reversed(logs)],
+            [
+                ("GET /api/v1/products", 200, False),
+                ("GET /api/v1/products", 400, "INVALID_PARAMETER"),
+                ("GET /api/v1/products", 401, "UNAUTHORIZED"),
+            ],
+        )
+        self.assertEqual(logs[-1].user_id, self.api_user)
+        self.assertFalse(logs[0].user_id)
+        self.assertNotIn("categ", json.dumps(logs.read(), default=str))
 
     def test_portal_user_forbidden(self):
         response = self._get(login="shop_portal_user")
@@ -280,6 +346,10 @@ class TestProductsApi(HttpCase):
         self.authenticate("shop_api_user", "shop_api_user")
         response = self.url_open(API_URL, data={"in_stock": "true"}, allow_redirects=False)
         self.assertEqual(response.status_code, 405)
+        self.assertEqual(response.headers["Content-Type"], "application/json; charset=utf-8")
+        error = response.json()["error"]
+        self.assertEqual((error["code"], error["field"]), ("METHOD_NOT_ALLOWED", None))
+        self.assertEqual(response.headers["Allow"], "GET")
 
     def test_unexpected_error_is_json_without_details(self):
         with (
