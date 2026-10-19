@@ -6,7 +6,7 @@ Módulo escrito para Odoo 16 y migrado a Odoo 18 en el ejercicio 2 de la prueba 
 
 - [x] A: migración de Odoo 16 a 18 (versión `18.0.1.0.0`).
 - [x] B: tipo de vehículo como catálogo, con script de migración de datos (versión `18.0.1.1.0`).
-- [ ] C: no iniciado.
+- [ ] C: desarrollado en la rama `mig/fleet_inspection_c` (migración por lotes e idempotente, generador de 10.000 inspecciones y `MIGRATION_PLAN.md`), sin integrar: por tiempo no se corrieron sus pruebas en Odoo ni el ensayo que mide los tiempos.
 
 ## Qué hace
 
