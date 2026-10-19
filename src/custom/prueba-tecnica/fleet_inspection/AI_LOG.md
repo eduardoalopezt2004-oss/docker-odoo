@@ -33,3 +33,29 @@ Partes donde preferí no delegar:
 
 - Las decisiones de la migración: ninguna mejora de lógica, la rama sin la corrección de T-200, la versión `18.0.1.0.0` y renombrar la prueba de `name_get` mostrándola en la tabla del README. Por la regla de no mejorar la lógica quedaron fuera tres hallazgos de la revisión de código.
 - La verificación en el navegador como inspector y como supervisor: el checklist al guardar, el solo lectura al iniciar, el bloqueo de Aprobar con un punto crítico fallido, el rechazo, la configuración del checklist y el reporte PDF. Ahí encontré que el inspector solo puede elegir vehículos de los que es conductor; lo resolví poniéndolo como conductor y quedó como limitación en el README.
+
+---
+
+# Tramo B — tipo de vehículo como catálogo y script de migración
+
+## Prompts clave (tramo B)
+
+1. "Ejercicio 2, tramo B ... el tipo de vehículo pasa a ser un catálogo ... Escribe el script en migrations/ ... Empieza por Entender y detente."
+   - La IA mostró, verificado en el código de Odoo 18, por qué cambiar el campo sin preparar la base pierde los datos: con el mismo nombre la actualización falla al convertir el texto, y con un nombre nuevo Odoo borra la columna vieja. Propuso guardar la columna con un `pre-migrate` y mapear los cuatro valores en el `post-migrate`.
+2. Aprobé el plan con mis decisiones (abajo) y siguió con las pruebas primero.
+
+## Qué decidí yo (tramo B)
+
+- Conservar el nombre `vehicle_type` para no cambiar vistas, reporte, filtros ni referencias externas. La convención de Odoo sería `vehicle_type_id`, y así quedó escrito en el README.
+- Que un valor anterior desconocido detenga la actualización en lugar de mandarlo a «Otro», porque eso le pondría un tipo equivocado sin avisar.
+- Conservar la columna anterior como respaldo para verificar y revertir.
+- Que el catálogo lo administre solo el supervisor y que sus nombres no se pisen al actualizar.
+
+## Lo que la IA hizo mal (tramo B)
+
+- `/code-review` encontró casos que la lógica de migración no cubría. Se agregaron tres pruebas que fallaban con la lógica anterior (`3 failed of 22`) y se corrigió: la migración solo completa tipos vacíos y nunca deja inspecciones sin tipo.
+
+## Cómo se verificó (tramo B)
+
+- Pruebas en una base nueva: 22 pruebas del módulo, sin fallos ni errores, 9 de ellas de la lógica de migración.
+- Prueba en el navegador automatizada por la IA del formulario con el tipo de vehículo como catálogo. Después la revisé en el navegador para confirmar.

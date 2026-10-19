@@ -44,7 +44,8 @@
                     <group>
                         <group>
                             <field name="vehicle_id" readonly="state != 'draft'"/>
-                            <field name="vehicle_type" readonly="state != 'draft'"/>
+                            <field name="vehicle_type" readonly="state != 'draft'"
+                                   options="{'no_create': True}"/>
                             <field name="odometer" readonly="state in ('approved', 'rejected')"/>
                         </group>
                         <group>

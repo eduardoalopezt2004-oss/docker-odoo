@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Los mismos cuatro valores de la selección de 18.0.1.0.0. El script de
+     migrations/18.0.1.1.0 los busca por estos identificadores. -->
+<odoo noupdate="1">
+    <record id="vehicle_type_motorcycle" model="fleet.inspection.vehicle.type">
+        <field name="name">Moto</field>
+    </record>
+    <record id="vehicle_type_car" model="fleet.inspection.vehicle.type">
+        <field name="name">Carro</field>
+    </record>
+    <record id="vehicle_type_truck" model="fleet.inspection.vehicle.type">
+        <field name="name">Camión</field>
+    </record>
+    <record id="vehicle_type_other" model="fleet.inspection.vehicle.type">
+        <field name="name">Otro</field>
+    </record>
+</odoo>

@@ -1,8 +1,11 @@
 from datetime import timedelta
 
+from psycopg2 import IntegrityError
+
 from odoo import fields
 from odoo.exceptions import AccessError, UserError, ValidationError
 from odoo.tests import Form, TransactionCase, tagged
+from odoo.tools import mute_logger
 
 
 @tagged("post_install", "-at_install")
@@ -24,8 +27,16 @@ class TestFleetInspection(TransactionCase):
             "groups_id": [(6, 0, [cls.env.ref("fleet_inspection.group_fleet_inspection_user").id])],
         })
 
+        cls.supervisor = cls.env["res.users"].create({
+            "name": "Supervisor de prueba",
+            "login": "supervisor_test",
+            "groups_id": [(6, 0, [cls.env.ref("fleet_inspection.group_fleet_inspection_manager").id])],
+        })
+        cls.type_car = cls.env.ref("fleet_inspection.vehicle_type_car")
+        cls.type_truck = cls.env.ref("fleet_inspection.vehicle_type_truck")
+
     def _new_inspection(self, **vals):
-        values = {"vehicle_id": self.vehicle.id, "vehicle_type": "truck", "inspector_id": self.inspector.id}
+        values = {"vehicle_id": self.vehicle.id, "vehicle_type": self.type_truck.id, "inspector_id": self.inspector.id}
         values.update(vals)
         return self.env["fleet.inspection"].create(values)
 
@@ -50,13 +61,13 @@ class TestFleetInspection(TransactionCase):
         """En la 16 lo hacía states= en el campo; en la 18 lo hace el formulario."""
         inspection = self._new_inspection()
         form = Form(inspection)
-        form.vehicle_type = "car"
+        form.vehicle_type = self.type_car
         form.save()
-        self.assertEqual(inspection.vehicle_type, "car")
+        self.assertEqual(inspection.vehicle_type, self.type_car)
         inspection.action_start()
         form = Form(inspection)
         with self.assertRaises(AssertionError):
-            form.vehicle_type = "truck"
+            form.vehicle_type = self.type_truck
         with self.assertRaises(AssertionError):
             form.vehicle_id = self.vehicle
 
@@ -103,7 +114,23 @@ class TestFleetInspection(TransactionCase):
         form.vehicle_id = self.vehicle
         inspection = form.save()
         self.assertEqual(inspection.inspector_id, self.inspector)
-        self.assertEqual(inspection.vehicle_type, "car")
+        self.assertEqual(inspection.vehicle_type, self.type_car)
+
+    def test_vehicle_type_catalog_access(self):
+        """El inspector elige del catálogo pero no lo modifica; el supervisor lo administra."""
+        VehicleType = self.env["fleet.inspection.vehicle.type"]
+        self.assertIn(self.type_car, VehicleType.with_user(self.inspector).search([]))
+        with self.assertRaises(AccessError):
+            VehicleType.with_user(self.inspector).create({"name": "Furgoneta"})
+        with self.assertRaises(AccessError):
+            self.type_car.with_user(self.inspector).write({"name": "Auto"})
+        van = VehicleType.with_user(self.supervisor).create({"name": "Furgoneta"})
+        self.assertEqual(self._new_inspection(vehicle_type=van.id).vehicle_type, van)
+
+    def test_vehicle_type_in_use_cannot_be_deleted(self):
+        self._new_inspection()
+        with self.assertRaises(IntegrityError), mute_logger("odoo.sql_db"), self.env.cr.savepoint():
+            self.type_truck.with_user(self.supervisor).unlink()
 
     def test_cron_marks_overdue_once(self):
         inspection = self._new_inspection(date=fields.Date.today() - timedelta(days=10))
