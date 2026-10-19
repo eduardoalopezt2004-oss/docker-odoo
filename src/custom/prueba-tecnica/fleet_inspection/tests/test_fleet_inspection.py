@@ -2,7 +2,7 @@ from datetime import timedelta
 
 from odoo import fields
 from odoo.exceptions import AccessError, UserError, ValidationError
-from odoo.tests.common import Form, TransactionCase, tagged
+from odoo.tests import Form, TransactionCase, tagged
 
 
 @tagged("post_install", "-at_install")
@@ -35,9 +35,30 @@ class TestFleetInspection(TransactionCase):
         items = self.env["fleet.inspection.item"].search([])
         self.assertEqual(inspection.line_ids.mapped("item_id"), items)
 
-    def test_name_get_includes_plate(self):
+    def test_display_name_includes_plate(self):
         inspection = self._new_inspection()
-        self.assertIn("AB123CD", inspection.name_get()[0][1])
+        self.assertIn("AB123CD", inspection.display_name)
+
+    def test_display_name_same_format_as_name_get(self):
+        """El texto es el mismo que daba name_get en la 16: número - placa, o número - nombre."""
+        inspection = self._new_inspection()
+        self.assertEqual(inspection.display_name, "%s - AB123CD" % inspection.name)
+        self.vehicle.license_plate = False
+        self.assertEqual(inspection.display_name, "%s - %s" % (inspection.name, self.vehicle.name))
+
+    def test_vehicle_editable_only_in_draft(self):
+        """En la 16 lo hacía states= en el campo; en la 18 lo hace el formulario."""
+        inspection = self._new_inspection()
+        form = Form(inspection)
+        form.vehicle_type = "car"
+        form.save()
+        self.assertEqual(inspection.vehicle_type, "car")
+        inspection.action_start()
+        form = Form(inspection)
+        with self.assertRaises(AssertionError):
+            form.vehicle_type = "truck"
+        with self.assertRaises(AssertionError):
+            form.vehicle_id = self.vehicle
 
     def test_full_flow_approved(self):
         inspection = self._new_inspection()
