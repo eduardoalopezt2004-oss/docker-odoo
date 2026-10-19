@@ -9,11 +9,13 @@ Esta carpeta es el directorio de addons de la prueba y tiene los cuatro módulos
 | Ejercicio | Módulo | Tramo A | Tramo B | Tramo C | Documentos clave |
 |---|---|---|---|---|---|
 | 1. Integración con API para una tienda en línea | `shop_integration_api` | Hecho | Hecho | No iniciado | README con el contrato, códigos HTTP y ejemplos para la tienda |
-| 2. Migración del módulo de inspecciones | `fleet_inspection` | Hecho | Hecho | No iniciado | README con la tabla de cambios de versión, script en `migrations/` |
+| 2. Migración del módulo de inspecciones | `fleet_inspection` | Hecho | Hecho | Desarrollado, sin integrar (ver nota) | README con la tabla de cambios de versión, script en `migrations/` |
 | 3. Ticket urgente T-200 | `sale_commission` | Hecho | Hecho | Hecho | `INCIDENT.md`, scripts de datos, PR de la rama `hotfix/T-200` |
 | 4. Solicitudes de pago con aprobación | `payment_request` | Hecho | Hecho | No iniciado | README con «Supuestos y preguntas al cliente» |
 
 Cada ejercicio se trabajó en su propia rama y se integró con un pull request (merge commit), así que el historial de cada uno se puede seguir commit por commit.
+
+**Nota sobre el tramo C del ejercicio 2.** Está desarrollado en la rama `mig/fleet_inspection_c`: migración por lotes e idempotente, scripts para generar 10.000 inspecciones y contar los tipos, y `MIGRATION_PLAN.md`. No se integró porque, por tiempo, no se llegaron a correr sus pruebas en Odoo ni el ensayo con 10.000 inspecciones que mide los tiempos. Solo se comprobó el SQL de los lotes en PostgreSQL, sin Odoo. Los pasos para completarlo están en el README de esa rama, sección *Ensayo con 10.000 inspecciones*.
 
 ## Levantar el entorno
 
