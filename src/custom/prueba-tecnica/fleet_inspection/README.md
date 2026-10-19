@@ -109,6 +109,7 @@ El script solo completa tipos vacíos: ejecutarlo otra vez no cambia nada ni des
   - las inspecciones nuevas no se tocan;
   - el pre-migrate renombra una sola vez una columna `varchar` o `text`, y no hace nada si ya es many2one.
 - Antes del código, la carga de las pruebas se detenía porque no existía `tools/vehicle_type_migration.py`. Las tres pruebas agregadas después de la revisión de código fallaban con la lógica anterior (`3 failed of 22`).
+- Prueba en el navegador automatizada por la IA del formulario con el tipo de vehículo como catálogo. Después la revisé en el navegador para confirmar.
 - Escenario real:
   1. Base nueva con la versión `18.0.1.0.0` y 11 inspecciones: 3 motos, 4 carros, 2 camiones y 2 «otro», en borrador, en curso, aprobadas y rechazadas.
   2. Respaldo con `pg_dump`.
