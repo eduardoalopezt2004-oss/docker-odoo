@@ -37,7 +37,7 @@ def preserve_legacy_vehicle_type(cr, table="fleet_inspection"):
     if sql.column_exists(cr, table, LEGACY_COLUMN):
         return False
     column = sql.table_columns(cr, table).get("vehicle_type")
-    if not column or column["udt_name"] != "varchar":
+    if not column or column["udt_name"] not in ("varchar", "text"):
         return False
     sql.rename_column(cr, table, "vehicle_type", LEGACY_COLUMN)
     _logger.info("%s.vehicle_type renombrada a %s antes de la migración", table, LEGACY_COLUMN)
@@ -45,73 +45,83 @@ def preserve_legacy_vehicle_type(cr, table="fleet_inspection"):
 
 
 def map_legacy_vehicle_types(env):
-    """Asigna a cada inspección el tipo del catálogo según su valor viejo (post-migrate).
+    """Asigna a cada inspección sin tipo el del catálogo según su valor viejo (post-migrate).
 
-    El tipo se toma siempre del valor viejo, no solo donde el campo nuevo está
-    vacío: Odoo llena las filas existentes de una columna requerida nueva con el
-    valor por defecto (Carro), y ese valor no es el tipo real de la inspección.
+    Durante la actualización las inspecciones existentes llegan con el tipo vacío:
+    Odoo calcula el valor por defecto de la columna nueva antes de cargar el
+    catálogo. Solo se completan esas; un tipo ya puesto no se toca, así que
+    ejecutar la función otra vez no deshace cambios hechos después de migrar.
 
-    Detiene la actualización si hay valores viejos sin destino en el catálogo, o
-    inspecciones sin valor viejo y sin tipo. Las inspecciones creadas después de
-    la migración (sin valor viejo, con tipo) no se tocan.
+    Detiene la actualización si hay valores viejos sin destino en el catálogo o si
+    al final queda alguna inspección sin tipo.
 
-    :return: cantidad de inspecciones que cambiaron de tipo.
+    :return: cantidad de inspecciones a las que se les asignó tipo.
     """
     cr = env.cr
-    if not sql.column_exists(cr, "fleet_inspection", LEGACY_COLUMN):
-        return 0
     env.flush_all()
+    updated = 0
+    summary = "sin respaldo de la versión anterior"
 
-    cr.execute(
-        """
-        SELECT vehicle_type_legacy, count(*)
-          FROM fleet_inspection
-         WHERE vehicle_type_legacy NOT IN %s
-            OR (vehicle_type_legacy IS NULL AND vehicle_type IS NULL)
-         GROUP BY vehicle_type_legacy
-         ORDER BY vehicle_type_legacy
-        """,
-        (tuple(LEGACY_XMLIDS),),
-    )
-    without_target = cr.fetchall()
-    if without_target:
-        detail = ", ".join("%s: %s" % (value or "(sin valor)", count) for value, count in without_target)
+    if sql.column_exists(cr, "fleet_inspection", LEGACY_COLUMN):
+        cr.execute(
+            """
+            SELECT vehicle_type_legacy, count(*)
+              FROM fleet_inspection
+             WHERE vehicle_type IS NULL AND vehicle_type_legacy NOT IN %s
+             GROUP BY vehicle_type_legacy
+             ORDER BY vehicle_type_legacy
+            """,
+            (tuple(LEGACY_XMLIDS),),
+        )
+        without_target = cr.fetchall()
+        if without_target:
+            detail = ", ".join("%s: %s" % row for row in without_target)
+            raise UserError(
+                env._(
+                    "No se puede migrar el tipo de vehículo: hay inspecciones con valores que no tienen "
+                    "destino en el catálogo (%s). La actualización se detuvo sin cambiar nada.",
+                    detail,
+                )
+            )
+        for legacy, xmlid in LEGACY_XMLIDS.items():
+            cr.execute(
+                """
+                UPDATE fleet_inspection
+                   SET vehicle_type = %s
+                 WHERE vehicle_type_legacy = %s
+                   AND vehicle_type IS NULL
+                """,
+                (env.ref(xmlid).id, legacy),
+            )
+            updated += cr.rowcount
+        env["fleet.inspection"].invalidate_model(["vehicle_type"])
+        cr.execute(
+            """
+            SELECT f.vehicle_type_legacy, t.name->>'en_US', count(*)
+              FROM fleet_inspection f
+              JOIN fleet_inspection_vehicle_type t ON t.id = f.vehicle_type
+             WHERE f.vehicle_type_legacy IS NOT NULL
+             GROUP BY 1, 2
+             ORDER BY 1
+            """
+        )
+        summary = ", ".join("%s -> %s: %s" % row for row in cr.fetchall()) or "sin inspecciones"
+
+    # Con o sin respaldo: ninguna inspección puede quedar sin tipo.
+    cr.execute("SELECT count(*) FROM fleet_inspection WHERE vehicle_type IS NULL")
+    missing = cr.fetchone()[0]
+    if missing:
         raise UserError(
             env._(
-                "No se puede migrar el tipo de vehículo: hay inspecciones con valores que no tienen "
-                "destino en el catálogo (%s). La actualización se detuvo sin cambiar nada.",
-                detail,
+                "No se puede migrar el tipo de vehículo: %s inspecciones quedarían sin tipo porque no "
+                "tienen un valor anterior que permita asignarlo. La actualización se detuvo sin cambiar nada.",
+                missing,
             )
         )
 
-    updated = 0
-    for legacy, xmlid in LEGACY_XMLIDS.items():
-        type_id = env.ref(xmlid).id
-        cr.execute(
-            """
-            UPDATE fleet_inspection
-               SET vehicle_type = %s
-             WHERE vehicle_type_legacy = %s
-               AND vehicle_type IS DISTINCT FROM %s
-            """,
-            (type_id, legacy, type_id),
-        )
-        updated += cr.rowcount
-    env["fleet.inspection"].invalidate_model(["vehicle_type"])
-
-    cr.execute(
-        """
-        SELECT f.vehicle_type_legacy, t.name->>'en_US', count(*)
-          FROM fleet_inspection f
-          JOIN fleet_inspection_vehicle_type t ON t.id = f.vehicle_type
-         WHERE f.vehicle_type_legacy IS NOT NULL
-         GROUP BY 1, 2
-         ORDER BY 1
-        """
-    )
     _logger.info(
-        "Tipo de vehículo migrado: %s inspecciones cambiaron. Valor viejo -> tipo: %s",
+        "Tipo de vehículo migrado: %s inspecciones recibieron su tipo del catálogo. Valor viejo -> tipo: %s",
         updated,
-        ", ".join("%s -> %s: %s" % row for row in cr.fetchall()) or "sin inspecciones",
+        summary,
     )
     return updated
