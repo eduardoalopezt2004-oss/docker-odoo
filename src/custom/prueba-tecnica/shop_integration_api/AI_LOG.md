@@ -31,11 +31,12 @@ resultado, para dedicar el tiempo a revisar y decidir en lugar de a escribir.
 - El contrato decía que sin sesión la respuesta es 303. Al probar con `curl` contra Odoo en marcha salió 404: el servidor local tiene varias bases y Odoo no sabe en cuál buscar la ruta. La IA lo encontró, verificó los dos casos y lo documentó en el README.
 - `/code-review` encontró que `modified_since` no veía un cambio de precio extra ni de nombre de un valor de atributo de una variante, y que un `AccessError` respondía 500 en vez de 403. Se agregaron pruebas que fallaban, se corrigió y pasaron.
 - La primera prueba de mutación (romper el código a propósito para ver si las pruebas lo detectan) no rompió nada: la IA usó una variable de shell en un comando de WSL lanzado desde Windows, y llegó vacía. Las pruebas dieron `0 failed` y casi lo tomó como bueno. Lo vio porque el diff salió vacío. La repitió con un script y fallaron las pruebas esperadas.
+- En la base de prueba manual, la IA reservó la Mesa directamente en el stock, sin una entrega. El planificador de Inventario borra las reservas que no tienen un movimiento detrás, y la borró segundos después de que la IA lo comprobara. Por eso `in_stock=true` traía 4 productos y no 3. Salió en la verificación; se corrigió con una entrega real que reserva las dos unidades.
 
 ## Lo que escribí yo sin IA
 
-> Borrador de la IA con las decisiones que tomé. Lo reescribo con mis palabras antes de subir.
+Partes donde preferí no delegar:
 
-- El formato de error del enunciado y las decisiones del contrato: cantidad libre, 400 para un parámetro desconocido y para una categoría inexistente, servicios incluidos y la limitación de `modified_since`.
-- La decisión de `sudo()` acotado en lugar de darle el grupo de Inventario al usuario de la tienda.
-- La verificación en el navegador con el usuario de la tienda y con un usuario del portal.
+- Las decisiones del contrato: usar desde el tramo A el formato de error del enunciado, publicar la cantidad libre, responder 400 a un parámetro desconocido o a una categoría inexistente, incluir los servicios y dejar los cambios de stock como limitación de `modified_since`.
+- El `sudo()` acotado al cálculo de la cantidad. La otra opción era darle el grupo de Inventario al usuario de la tienda, y con sus credenciales se podría mover inventario.
+- La verificación. Probé la API en el navegador con el usuario de la tienda y con uno del portal, y pedí una verificación automatizada del resto de los casos. Ahí salió que los datos de prueba no tenían la reserva de la Mesa; se corrigieron.
