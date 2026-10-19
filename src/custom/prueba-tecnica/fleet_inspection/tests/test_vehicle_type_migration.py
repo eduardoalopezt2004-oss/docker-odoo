@@ -3,11 +3,14 @@ from odoo.tests import TransactionCase, tagged
 from odoo.tools import SQL, sql
 
 from odoo.addons.fleet_inspection.tools.vehicle_type_migration import (
+    DEFAULT_BATCH_SIZE,
     LEGACY_COLUMN,
     LEGACY_XMLIDS,
     map_legacy_vehicle_types,
     preserve_legacy_vehicle_type,
 )
+
+MIGRATION_LOGGER = "odoo.addons.fleet_inspection.tools.vehicle_type_migration"
 
 
 @tagged("post_install", "-at_install")
@@ -118,3 +121,76 @@ class TestVehicleTypeMigration(TransactionCase):
         self.assertFalse(preserve_legacy_vehicle_type(cr))
         self.assertEqual(sql.table_columns(cr, "fleet_inspection")["vehicle_type"]["udt_name"], "int4")
         self.assertFalse(sql.column_exists(cr, "fleet_inspection", LEGACY_COLUMN))
+
+    # Tramo C: procesamiento por lotes
+
+    def _add_legacy_inspections(self, legacy_values):
+        """Inspecciones extra en el estado de mitad de actualización, con el valor viejo dado."""
+        inspections = self.env["fleet.inspection"].create([{"vehicle_id": self.vehicle.id} for _ in legacy_values])
+        self.env.flush_all()
+        for inspection, legacy in zip(inspections, legacy_values):
+            self.env.cr.execute(
+                "UPDATE fleet_inspection SET vehicle_type = NULL, vehicle_type_legacy = %s WHERE id = %s",
+                (legacy, inspection.id),
+            )
+        self.env.invalidate_all()
+        return inspections
+
+    def test_default_batch_size(self):
+        self.assertEqual(DEFAULT_BATCH_SIZE, 1000)
+
+    def test_small_batches_give_same_result(self):
+        """Lotes de una sola inspección dan lo mismo que un solo lote."""
+        updated = map_legacy_vehicle_types(self.env, batch_size=1)
+        self.assertEqual(updated, 4)
+        expected = {legacy: self.env.ref(xmlid) for legacy, xmlid in LEGACY_XMLIDS.items()}
+        self.assertEqual(self._types(), expected)
+
+    def test_batches_cover_every_row_and_count_batches(self):
+        """33 inspecciones sin tipo (4 de setUpClass y 29 nuevas) en lotes de 7: 5 lotes, ninguna queda sin tipo."""
+        legacy_values = list(LEGACY_XMLIDS) * 6 + ["car"]
+        extra = self._add_legacy_inspections(legacy_values)
+        with self.assertLogs(MIGRATION_LOGGER, level="INFO") as logs:
+            updated = map_legacy_vehicle_types(self.env, batch_size=7)
+        self.assertEqual(updated, 33)
+        self.assertIn("en 5 lotes de hasta 7", "\n".join(logs.output))
+        self.env.invalidate_all()
+        for inspection, legacy in zip(extra, legacy_values):
+            self.assertEqual(inspection.vehicle_type, self.env.ref(LEGACY_XMLIDS[legacy]))
+
+    def test_batches_skip_rows_that_already_have_a_type(self):
+        """Una fila con tipo entre filas sin tipo no se toca, aunque caiga dentro de un lote."""
+        truck = self.env.ref("fleet_inspection.vehicle_type_truck")
+        self.env.cr.execute(
+            "UPDATE fleet_inspection SET vehicle_type = %s WHERE id = %s",
+            (truck.id, self.inspection_by_legacy["car"].id),
+        )
+        self.env.invalidate_all()
+        updated = map_legacy_vehicle_types(self.env, batch_size=2)
+        self.assertEqual(updated, 3)
+        self.assertEqual(self._types()["car"], truck)
+        self.assertEqual(self._types()["other"], self.env.ref("fleet_inspection.vehicle_type_other"))
+
+    def test_second_run_in_batches_changes_nothing(self):
+        map_legacy_vehicle_types(self.env, batch_size=3)
+        after_first = self._types()
+        with self.assertLogs(MIGRATION_LOGGER, level="INFO") as logs:
+            self.assertEqual(map_legacy_vehicle_types(self.env, batch_size=3), 0)
+        self.assertEqual(self._types(), after_first)
+        self.assertIn("en 0 lotes", "\n".join(logs.output))
+
+    def test_batch_size_must_be_positive(self):
+        for batch_size in (0, -1):
+            with self.subTest(batch_size=batch_size), self.assertRaises(ValueError):
+                map_legacy_vehicle_types(self.env, batch_size=batch_size)
+        # No asignó nada antes de rechazar el tamaño de lote.
+        self.assertFalse(self._types()["motorcycle"])
+
+    def test_log_reports_time_and_memory(self):
+        """El registro deja el tiempo y la memoria máxima del proceso, para medir en una base real."""
+        with self.assertLogs(MIGRATION_LOGGER, level="INFO") as logs:
+            map_legacy_vehicle_types(self.env)
+        output = "\n".join(logs.output)
+        self.assertRegex(output, r"en \d+(\.\d+)? s")
+        self.assertIn("memoria máxima del proceso", output)
+
