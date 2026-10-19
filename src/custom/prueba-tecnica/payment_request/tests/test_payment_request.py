@@ -75,6 +75,26 @@ class TestPaymentRequest(TransactionCase):
         with self.assertRaises(AccessError):
             self._new_request(requester_id=self.other_requester.id)
 
+    def test_number_and_requester_fixed_after_create(self):
+        request = self._new_request()
+        with self.assertRaises(UserError):
+            request.write({"requester_id": self.other_requester.id})
+        with self.assertRaises(UserError):
+            request.write({"name": "SP/2026/0001"})
+        # Un aprobador no puede pasar su solicitud a otro al enviarla para luego aprobarla.
+        own = self._new_request(self.approver)
+        with self.assertRaises(UserError):
+            own.write({"state": "submitted", "requester_id": self.requester.id})
+        self.assertEqual(own.state, "draft")
+        self.assertEqual(own.requester_id, self.approver)
+
+    def test_copy_belongs_to_current_user(self):
+        request = self._submitted_request()
+        copy = request.with_user(self.approver).copy()
+        self.assertEqual(copy.requester_id, self.approver)
+        self.assertEqual(copy.state, "draft")
+        self.assertNotEqual(copy.name, request.name)
+
     # Flujo
 
     def test_full_flow(self):
