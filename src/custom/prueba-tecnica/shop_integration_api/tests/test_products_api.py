@@ -1,6 +1,9 @@
 from unittest.mock import patch
 
+from odoo.exceptions import AccessError
 from odoo.tests import HttpCase, new_test_user, tagged
+
+from odoo.addons.shop_integration_api.controllers.main import ShopIntegrationController
 
 API_URL = "/api/v1/products"
 OLD_DATE = "2020-01-01 00:00:00"
@@ -225,12 +228,27 @@ class TestProductsApi(HttpCase):
         self.assertEqual(response.status_code, 405)
 
     def test_unexpected_error_is_json_without_details(self):
-        Product = type(self.env["product.product"])
         with (
-            patch.object(Product, "search_read", side_effect=RuntimeError("detalle interno")),
+            patch.object(
+                ShopIntegrationController, "_products_domain", side_effect=RuntimeError("detalle interno")
+            ),
             self.assertLogs("odoo.addons.shop_integration_api", level="ERROR"),
         ):
             response = self._get()
         self.assertEqual(response.status_code, 500)
         self.assertEqual(response.json()["error"]["code"], "INTERNAL_ERROR")
         self.assertNotIn("detalle interno", response.text)
+
+    def test_api_user_has_no_inventory_rights(self):
+        """El sudo() del controlador solo cubre el cálculo de free_qty: el usuario
+        de la API sigue sin poder leer ni mover inventario por su cuenta."""
+        with self.assertRaises(AccessError):
+            self.env["stock.move"].with_user(self.api_user).search([])
+        with self.assertRaises(AccessError):
+            self.env["stock.quant"].with_user(self.api_user).create(
+                {
+                    "product_id": self.p_stock.id,
+                    "location_id": self.env.ref("stock.stock_location_stock").id,
+                    "quantity": 1,
+                }
+            )
