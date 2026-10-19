@@ -1,2 +1,6 @@
 id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
 access_payment_request_requester,payment.request.requester,model_payment_request,group_payment_requester,1,1,1,1
+access_payment_approval_level_requester,payment.approval.level.requester,model_payment_approval_level,group_payment_requester,1,0,0,0
+access_payment_approval_level_admin,payment.approval.level.admin,model_payment_approval_level,base.group_system,1,1,1,1
+access_payment_request_reject_wizard_approver,payment.request.reject.wizard.approver,model_payment_request_reject_wizard,group_payment_approver,1,1,1,1
+access_payment_request_pay_wizard_treasury,payment.request.pay.wizard.treasury,model_payment_request_pay_wizard,group_payment_treasury,1,1,1,1
