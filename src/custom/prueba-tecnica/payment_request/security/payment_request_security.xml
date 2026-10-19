@@ -10,19 +10,18 @@
         <field name="category_id" ref="module_category_payment_request"/>
     </record>
 
-    <!-- Aprobador y Tesorería no se incluyen entre sí: quien paga no aprueba. -->
+    <!-- Aprobador y Tesorería no se incluyen entre sí: quien paga no aprueba.
+         Por eso tampoco se asignan al administrador al instalar. -->
     <record id="group_payment_approver" model="res.groups">
         <field name="name">Aprobador</field>
         <field name="category_id" ref="module_category_payment_request"/>
         <field name="implied_ids" eval="[(4, ref('group_payment_requester'))]"/>
-        <field name="users" eval="[(4, ref('base.user_root')), (4, ref('base.user_admin'))]"/>
     </record>
 
     <record id="group_payment_treasury" model="res.groups">
         <field name="name">Tesorería</field>
         <field name="category_id" ref="module_category_payment_request"/>
         <field name="implied_ids" eval="[(4, ref('group_payment_requester'))]"/>
-        <field name="users" eval="[(4, ref('base.user_root')), (4, ref('base.user_admin'))]"/>
     </record>
 
     <!-- Cualquier empleado puede pedir un pago: todo usuario interno es Solicitante. -->

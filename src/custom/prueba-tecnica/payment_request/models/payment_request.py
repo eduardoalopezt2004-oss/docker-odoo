@@ -11,8 +11,10 @@ class PaymentRequest(models.Model):
     _inherit = ["mail.thread"]
     _order = "id desc"
 
+    # Se fijan al crear: si el solicitante cambiara, un aprobador podría aprobar su propia solicitud.
+    _FIXED_FIELDS = {"name", "requester_id"}
     # Campos que nadie puede cambiar fuera de borrador.
-    _LOCKED_FIELDS = {"name", "partner_id", "requester_id", "amount", "currency_id", "date", "concept"}
+    _LOCKED_FIELDS = {"partner_id", "amount", "currency_id", "date", "concept"}
     # Estado destino: (estados desde los que se puede llegar, grupo que hace el cambio).
     # Enviar no pide grupo: lo hace el solicitante de la solicitud.
     _TRANSITIONS = {
@@ -25,7 +27,12 @@ class PaymentRequest(models.Model):
     name = fields.Char(string="Número", required=True, readonly=True, copy=False, default=lambda self: _("Nuevo"))
     partner_id = fields.Many2one("res.partner", string="Proveedor", required=True, tracking=True)
     requester_id = fields.Many2one(
-        "res.users", string="Solicitante", required=True, default=lambda self: self.env.user, tracking=True
+        "res.users",
+        string="Solicitante",
+        required=True,
+        copy=False,
+        default=lambda self: self.env.user,
+        tracking=True,
     )
     # Sin suma al agrupar: las solicitudes pueden estar en monedas distintas.
     amount = fields.Monetary(string="Monto", required=True, currency_field="currency_id", aggregator=False, tracking=True)
@@ -67,6 +74,8 @@ class PaymentRequest(models.Model):
         return super().create(vals_list)
 
     def write(self, vals):
+        if self._FIXED_FIELDS.intersection(vals):
+            raise UserError(_("El número y el solicitante de una solicitud no se pueden cambiar."))
         if self._LOCKED_FIELDS.intersection(vals) and any(request.state != "draft" for request in self):
             raise UserError(_("Una solicitud enviada ya no se puede modificar."))
         if "state" in vals:
