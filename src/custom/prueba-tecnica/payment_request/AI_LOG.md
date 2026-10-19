@@ -9,6 +9,9 @@
   - Revisión obligatoria de cada tramo contra los criterios del enunciado antes de cerrarlo.
   - Condición de cierre: pruebas en base nueva, linter del repositorio y mi verificación en el
     navegador antes de cada push.
+  - En el tramo B usé créditos de Claude Code en la nube para el trabajo más pesado (escribir el
+    código y las pruebas), para optimizar tiempo y créditos. Después lo probé y ajusté en el
+    entorno local.
 
 Delegué en la IA la redacción de código, pruebas y documentos, dentro de esas reglas. Mi trabajo
 fue definir el método, revisar y aprobar cada propuesta, decidir los supuestos y verificar el
@@ -70,4 +73,4 @@ Partes donde preferí no delegar:
 ## Cómo lo verifiqué
 
 - Corrí las pruebas en una base nueva de Odoo 18 con `account` instalado: 47 pruebas del módulo, sin fallos ni errores después de la corrección. Eso confirmó el uso de `account.payment`, `_convert`, `activity_schedule` y el reporte.
-- Quedó pendiente por tiempo la prueba a mano en el navegador.
+- Pruebas en el navegador automatizadas por la IA, con un usuario por grupo: envío con aprobador asignado y su actividad, rechazo con motivo en el chatter, pago con diario y PDF con quién aprobó y cuándo. Después las revisé en el navegador para confirmar.

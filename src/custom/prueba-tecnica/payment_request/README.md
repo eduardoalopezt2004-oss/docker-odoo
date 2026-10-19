@@ -134,7 +134,7 @@ A mano, con un usuario por grupo y un administrador:
 - Pruebas en una base nueva de Odoo 18.0, sin datos demo y con `account` instalado: 47 pruebas del módulo (tramos A y B), sin fallos ni errores. Cubren los niveles por monto, el aprobador asignado con su actividad, que solo él apruebe, el rechazo con motivo en el chatter, el pago vinculado, que no se pueda pagar dos veces y el PDF con quién aprobó y cuándo.
 - La primera corrida dio 37 errores con una sola causa: los usuarios de las pruebas no tenían correo, y Odoo no puede notificar la actividad del aprobador sin el correo de quien envía. Se corrigió dándoles un correo de ejemplo en las pruebas.
 - Limitación: para enviar una solicitud, el usuario necesita un correo configurado, porque Odoo lo exige al notificar la actividad del aprobador.
-- Pendiente por tiempo: la prueba a mano de los pasos de [Pruebas del tramo B](#pruebas-del-tramo-b) en el navegador.
+- Pruebas en el navegador automatizadas por la IA, con un usuario por grupo: envío con aprobador asignado y su actividad, rechazo con motivo en el chatter, pago con diario y PDF con quién aprobó y cuándo. Después las revisé en el navegador para confirmar.
 
 ## Supuestos (tramo A)
 
