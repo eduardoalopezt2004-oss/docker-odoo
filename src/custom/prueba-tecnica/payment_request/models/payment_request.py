@@ -195,8 +195,10 @@ class PaymentRequest(models.Model):
             return
         try:
             with self.env.cr.savepoint(flush=False):
+                # Sin registrar el error: el choque es esperado y se convierte en el aviso de abajo.
                 self.env.cr.execute(
-                    SQL("SELECT id FROM payment_request WHERE id IN %s FOR UPDATE NOWAIT", tuple(self.ids))
+                    SQL("SELECT id FROM payment_request WHERE id IN %s FOR UPDATE NOWAIT", tuple(self.ids)),
+                    log_exceptions=False,
                 )
         except LockNotAvailable:
             raise UserError(
