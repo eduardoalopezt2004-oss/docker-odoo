@@ -25,7 +25,7 @@ class PaymentRequest(models.Model):
     _LOCKED_FIELDS = {"company_id", "partner_id", "amount", "currency_id", "date", "concept"}
     # Los escribe solo el propio módulo (con sudo()): el aprobador y su fecha, el motivo del rechazo y
     # el pago. Si un usuario los pudiera escribir, podría cambiar quién aprueba o dar por pagada la solicitud.
-    _SYSTEM_FIELDS = {"approver_id", "approval_date", "reject_reason", "payment_id"}
+    _SYSTEM_FIELDS = {"approver_id", "approval_date", "reject_reason", "payment_id", "payment_rate"}
     # Estado destino: (estados desde los que se puede llegar, grupo que hace el cambio).
     # Enviar no pide grupo: lo hace el solicitante de la solicitud.
     _TRANSITIONS = {
@@ -65,6 +65,19 @@ class PaymentRequest(models.Model):
     # superusuario: así los ve quien no tiene permisos de Contabilidad (Tesorería, el solicitante).
     payment_name = fields.Char(related="payment_id.name", string="Número del pago")
     payment_date = fields.Date(related="payment_id.date", string="Fecha del pago")
+    # Lo que se pagó, en la moneda del diario, y la tasa usada (tramo C).
+    payment_currency_id = fields.Many2one(related="payment_id.currency_id", string="Moneda del pago")
+    payment_amount = fields.Monetary(
+        related="payment_id.amount", string="Monto pagado", currency_field="payment_currency_id"
+    )
+    payment_rate = fields.Float(
+        string="Tasa del pago",
+        digits=(16, 6),
+        readonly=True,
+        copy=False,
+        help="Unidades de la moneda del pago por cada unidad de la moneda de la solicitud, el día del pago.",
+    )
+    payment_rate_text = fields.Char(string="Tasa", compute="_compute_payment_rate_text")
     state = fields.Selection(
         [
             ("draft", "Borrador"),
@@ -87,6 +100,18 @@ class PaymentRequest(models.Model):
         for request in self:
             if request.currency_id.compare_amounts(request.amount, 0.0) <= 0:
                 raise ValidationError(_("El monto de la solicitud debe ser mayor que cero."))
+
+    @api.depends("payment_rate", "currency_id", "payment_currency_id")
+    def _compute_payment_rate_text(self):
+        for request in self:
+            if request.payment_currency_id and request.payment_currency_id != request.currency_id:
+                request.payment_rate_text = "1 %s = %s %s" % (
+                    request.currency_id.name,
+                    "%.10g" % request.payment_rate,
+                    request.payment_currency_id.name,
+                )
+            else:
+                request.payment_rate_text = False
 
     @api.model_create_multi
     def create(self, vals_list):
@@ -231,27 +256,72 @@ class PaymentRequest(models.Model):
         )
         self.write({"state": "rejected"})
 
+    def _get_payment_terms(self, journal, payment_date):
+        """Moneda, monto y tasa con que se paga esta solicitud desde ``journal`` el día ``payment_date``.
+
+        El pago sale en la moneda del diario. Si es distinta de la de la solicitud, el monto se convierte
+        con la tasa de ese día exacto. Si falta, se avisa en lugar de usar una anterior, que es lo que
+        haría Odoo por defecto.
+
+        :return: (moneda del pago, monto en esa moneda, tasa: unidades de la moneda del pago por
+            unidad de la moneda de la solicitud)
+        :raises UserError: si falta la tasa de ese día de alguna de las dos monedas
+        """
+        self.ensure_one()
+        company = self.company_id
+        payment_date = fields.Date.to_date(payment_date)
+        currency = journal.currency_id or company.currency_id
+        if currency == self.currency_id:
+            return currency, self.amount, 1.0
+        Rate = self.env["res.currency.rate"]
+        # Las tasas de Odoo son respecto de la moneda de la compañía: esa no necesita tasa.
+        for rated in (self.currency_id | currency) - company.currency_id:
+            domain = [("currency_id", "=", rated.id), ("name", "=", payment_date), ("company_id", "in", [company.id, False])]
+            if not Rate.search_count(domain, limit=1):
+                raise UserError(
+                    _(
+                        "No hay tasa de %(currency)s para el %(date)s en %(company)s. Cárgala en Contabilidad → "
+                        "Configuración → Monedas antes de pagar: el pago usa la tasa de ese día, no una anterior.",
+                        currency=rated.name,
+                        date=payment_date.strftime("%d/%m/%Y"),
+                        company=company.name,
+                    )
+                )
+        rate = self.env["res.currency"]._get_conversion_rate(self.currency_id, currency, company, payment_date)
+        return currency, currency.round(self.amount * rate), rate
+
     def _pay(self, journal, payment_date):
         """Registra el pago al proveedor en contabilidad y marca la solicitud como pagada.
 
+        El pago sale en la moneda del diario, convertido con la tasa del día del pago si hace falta.
         Todo ocurre en la misma transacción: si el pago falla, la solicitud sigue aprobada.
         """
         self.ensure_one()
         self._check_state_change("paid", final=False)
         if self.payment_id:
             raise UserError(_("La solicitud %s ya tiene un pago registrado.", self.name))
+        if journal.company_id != self.company_id:
+            raise UserError(
+                _(
+                    "El diario %(journal)s es de otra compañía que la solicitud (%(company)s).",
+                    journal=journal.display_name,
+                    company=self.company_id.display_name,
+                )
+            )
+        currency, amount, rate = self._get_payment_terms(journal, payment_date)
         # sudo() solo para crear y publicar este pago: Tesorería no tiene permisos de Contabilidad y
         # no se los damos. Los datos del pago salen de la solicitud, no del usuario.
         payment = (
             self.env["account.payment"]
+            .with_company(self.company_id)
             .sudo()
             .create(
                 {
                     "payment_type": "outbound",
                     "partner_type": "supplier",
                     "partner_id": self.partner_id.id,
-                    "amount": self.amount,
-                    "currency_id": self.currency_id.id,
+                    "amount": amount,
+                    "currency_id": currency.id,
                     "journal_id": journal.id,
                     "date": payment_date,
                     "payment_request_id": self.id,
@@ -259,7 +329,7 @@ class PaymentRequest(models.Model):
             )
         )
         payment.action_post()
-        self.sudo().write({"payment_id": payment.id})
+        self.sudo().write({"payment_id": payment.id, "payment_rate": rate})
         self.write({"state": "paid"})
 
     def _check_current_user_email(self, message):

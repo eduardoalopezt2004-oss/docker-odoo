@@ -78,6 +78,9 @@
                             <field name="company_id" invisible="1"/>
                             <field name="payment_name" invisible="not payment_id"/>
                             <field name="payment_date" invisible="not payment_id"/>
+                            <field name="payment_currency_id" invisible="1"/>
+                            <field name="payment_amount" invisible="not payment_id"/>
+                            <field name="payment_rate_text" invisible="not payment_rate_text"/>
                         </group>
                     </group>
                     <group invisible="state != 'rejected'">
