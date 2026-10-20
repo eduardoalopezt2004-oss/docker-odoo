@@ -74,3 +74,38 @@ Partes donde preferí no delegar:
 
 - Corrí las pruebas en una base nueva de Odoo 18 con `account` instalado: 49 pruebas del módulo, sin fallos ni errores después de la corrección. Eso confirmó el uso de `account.payment`, `_convert`, `activity_schedule` y el reporte.
 - Pruebas en el navegador automatizadas por la IA, con un usuario por grupo: envío con aprobador asignado y su actividad, rechazo con motivo en el chatter, pago con diario y PDF con quién aprobó y cuándo. Después las revisé en el navegador para confirmar.
+
+---
+
+# Tramo C — pago en otra moneda, multi-compañía y concurrencia
+
+## Prompts clave (tramo C)
+
+Resúmenes, no citas textuales:
+
+1. Seguir con el tramo C del ejercicio 4 con la misma metodología: la IA propone el plan, yo decido, después pruebas, código y documentación.
+   - La IA propuso el plan sobre el código integrado y dejó tres decisiones abiertas: qué hacer si falta la tasa del día, cómo numerar con varias compañías y qué ve quien llega segundo cuando dos personas actúan a la vez.
+2. Le pedí desarrollar mejor las opciones, con ejemplos, sin etiquetarlas con letras y nombrando siempre ejercicio y tramo. Con eso decidí (abajo).
+3. "Haz el ejercicio 4, tramo C, como lo hablamos, y agrega los supuestos y preguntas que conversamos."
+
+## Qué decidí yo (tramo C)
+
+- **Tasa exacta del día del pago.** Si falta, el pago se bloquea con un aviso en lugar de usar una tasa anterior.
+- **No automatizar la carga de tasas en este tramo.** Mi idea fue tomarlas automáticamente según la fuente que use el cliente, mostrando la fecha, con corrección manual y como función que se pueda apagar. Quedó escrita como propuesta en `ARCHITECTURE.md`, porque depende de qué tasa usen y de dónde la saquen, y es de toda la contabilidad, no de este módulo.
+- **Numeración por compañía con código** (DA/SP/2026/0001), con filtro por compañía. Se me ocurrió para que cada compañía tenga su numeración seguida sin que el número se repita entre compañías. Sin código, cada compañía sigue con el contador general.
+- **Aviso inmediato** para la segunda persona cuando dos actúan a la vez sobre la misma solicitud.
+- **Preguntas nuevas para Carolina:** si llevan la contabilidad en Odoo, si manejan más de una empresa y si cada una necesita su numeración, y la pregunta de la tasa ampliada (qué tasa, de qué fuente, si ya la registran en Odoo, quién la carga y si les serviría tomarla automáticamente). También que el PDF muestre el monto pagado y la tasa.
+- **Orden de trabajo:** primero lo que pide el enunciado y al final la numeración por compañía, que es un agregado nuestro y lo primero que se recortaría por tiempo.
+
+## Lo que la IA hizo mal (tramo C)
+
+- Asumió que la tasa era la del BCV, sin que el correo ni el enunciado lo dijeran, y con ese supuesto argumentó contra automatizarla (que el BCV no tiene API oficial). Se lo corregí: la fuente es justamente una pregunta para Carolina. Quedó así en el README y en `ARCHITECTURE.md`.
+- Planteó las decisiones abiertas con letras («2a», «3a»), y la primera vez sin el contexto suficiente para decidir: no explicaba qué pasaba con cada opción ni a quién afectaba. Tuve que pedirle que las desarrollara y que dejara de usar letras para algo que no fueran los tramos.
+- No había escrito como supuesto que la contabilidad se lleva en Odoo, aunque el tramo B ya dependía de eso al crear un `account.payment`. Salió al conversar el C y quedó como supuesto y como pregunta 11.
+- Al escribir la prueba del mensaje de tasa faltante, la fecha del mensaje dependía del idioma del usuario. Se fijó el formato día/mes/año en el código para que el mensaje y la prueba no cambien según el idioma.
+
+## Cómo se verificó (tramo C)
+
+- Las pruebas del tramo C **están pendientes de ejecutar en Odoo**.
+- El bloqueo de concurrencia se comprobó en PostgreSQL 16, sin Odoo, con dos conexiones en `REPEATABLE READ`: la segunda recibe el aviso en 0,001 s sin esperar, su transacción sigue usable, y si la primera ya confirmó, PostgreSQL detecta el conflicto.
+- Solo se pasó un análisis estático básico con `ruff`. El linter del repositorio (`pylint` con `pylint_odoo`) no estaba instalado.
