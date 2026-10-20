@@ -6,7 +6,7 @@ Módulo escrito para Odoo 16 y migrado a Odoo 18 en el ejercicio 2 de la prueba 
 
 - [x] A: migración de Odoo 16 a 18 (versión `18.0.1.0.0`).
 - [x] B: tipo de vehículo como catálogo, con script de migración de datos (versión `18.0.1.1.0`).
-- [x] C: migración por lotes e idempotente, ensayo con 10.000 inspecciones y `MIGRATION_PLAN.md`. Los tiempos del ensayo están pendientes de medir (ver [Ensayo con 10.000 inspecciones](#ensayo-con-10000-inspecciones)).
+- [x] C: migración por lotes e idempotente, ensayo medido con 10.000 inspecciones y `MIGRATION_PLAN.md` con sus pasos probados (ver [Ensayo con 10.000 inspecciones](#ensayo-con-10000-inspecciones)).
 
 ## Qué hace
 
@@ -146,16 +146,19 @@ En `scripts/`, para correr con `odoo shell`. El módulo no los carga:
 
 ### Ensayo con 10.000 inspecciones
 
-Se hace en una base desechable, en la máquina donde corre la instancia. Desde la raíz del repositorio:
+Se hace en una base desechable, en la máquina donde corre la instancia. Desde la raíz del repositorio, con el código que trae este tramo y sin cambios sin guardar:
 
 ```bash
 BASE=fleet_ensayo
 SVC="docker compose -f docker-compose.generated.yml exec -T odoo-prueba-tecnica"
+DB="docker compose -f docker-compose.generated.yml exec -T db-pg16"
+FS=/home/odoo/data/filestore
+NUEVO=$(git rev-parse HEAD)   # commit con el tramo C, para volver en el paso 6
 
 # 1. Copiar los scripts fuera del repositorio: el paso 2 cambia el código.
-git fetch origin
-git show origin/mig/fleet_inspection_c:src/custom/prueba-tecnica/fleet_inspection/scripts/generate_legacy_inspections.py > /tmp/generate_legacy_inspections.py
-git show origin/mig/fleet_inspection_c:src/custom/prueba-tecnica/fleet_inspection/scripts/check_vehicle_types.py > /tmp/check_vehicle_types.py
+cp src/custom/prueba-tecnica/fleet_inspection/scripts/generate_legacy_inspections.py /tmp/
+cp src/custom/prueba-tecnica/fleet_inspection/scripts/check_vehicle_types.py /tmp/
+mkdir -p ~/ensayo_respaldo
 
 # 2. Código con la versión 18.0.1.0.0 (último commit antes del tramo B del ejercicio 2).
 git switch --detach fb39197
@@ -168,11 +171,12 @@ time $SVC odoo -d $BASE -i fleet_inspection --without-demo=all --stop-after-init
 time $SVC odoo shell -d $BASE --no-http < /tmp/generate_legacy_inspections.py 2>&1 | tee ~/ensayo_1_generacion.log
 $SVC odoo shell -d $BASE --no-http < /tmp/check_vehicle_types.py 2>&1 | tee ~/ensayo_2_antes.txt
 
-# 5. Respaldo (medido), como en producción.
-time scripts/odoo_backup backup prueba-tecnica -d $BASE -p ~/ensayo_respaldo/
+# 5. Respaldo de la base y del filestore (medido), como en producción.
+time { $DB pg_dump -U odoo -Fc -d $BASE > ~/ensayo_respaldo/$BASE.dump \
+  && $SVC tar czf - -C $FS $BASE > ~/ensayo_respaldo/filestore.tgz; }
 
 # 6. Código nuevo y actualización (medido).
-git switch mig/fleet_inspection_c
+git switch --detach $NUEVO
 time ./odoo update prueba-tecnica -d $BASE -m fleet_inspection 2>&1 | tee ~/ensayo_3_actualizacion.log
 grep -E "Tipo de vehículo migrado|No se puede migrar|ERROR|CRITICAL" ~/ensayo_3_actualizacion.log
 $SVC odoo shell -d $BASE --no-http < /tmp/check_vehicle_types.py 2>&1 | tee ~/ensayo_4_despues.txt
@@ -185,8 +189,11 @@ grep -E "Tipo de vehículo migrado|ERROR|CRITICAL" ~/ensayo_5_segunda.log
 $SVC odoo shell -d $BASE --no-http < /tmp/check_vehicle_types.py 2>&1 | tee ~/ensayo_6_despues_segunda.txt
 
 # 8. Restaurar el respaldo del paso 5 en otra base (medido) y contar: debe dar lo mismo que el paso 4.
-time ./odoo restore prueba-tecnica -z ~/ensayo_respaldo/<archivo>.zip -d ${BASE}_restaurada
-$SVC odoo shell -d ${BASE}_restaurada --no-http < /tmp/check_vehicle_types.py
+R=${BASE}_restaurada
+time { $DB createdb -U odoo $R \
+  && $DB pg_restore -U odoo -d $R --no-owner < ~/ensayo_respaldo/$BASE.dump \
+  && $SVC sh -c "mkdir -p $FS/$R && tar xzf - -C $FS/$R --strip-components=1" < ~/ensayo_respaldo/filestore.tgz; }
+$SVC odoo shell -d $R --no-http < /tmp/check_vehicle_types.py
 ```
 
 Qué se espera:
@@ -198,22 +205,44 @@ Qué se espera:
 | 7 | `Tipo de vehículo migrado: 0 inspecciones … en 0 lotes`; `ensayo_6_despues_segunda.txt` igual a `ensayo_4_despues.txt` |
 | 8 | Igual que `ensayo_2_antes.txt` |
 
-### Cómo se verificó (tramo C)
+### Resultado del ensayo
 
-- Pruebas automáticas nuevas en `tests/test_vehicle_type_migration.py`: lotes de 1 dan lo mismo que uno solo; 33 inspecciones en lotes de 7 son 5 lotes y ninguna queda sin tipo; una fila con tipo dentro de un lote no se toca; una segunda ejecución por lotes no cambia nada ("0 lotes"); un tamaño de lote 0 o negativo se rechaza antes de tocar datos; el registro trae el tiempo y la memoria. **Pendiente de ejecutar en Odoo.**
-- Revisión del código sin ejecutar Odoo, y análisis estático básico con `ruff` (sintaxis y nombres sin definir).
-- El SQL de los lotes (la consulta que delimita cada lote y el `UPDATE` con `VALUES`) se ejecutó tal cual en PostgreSQL 16, sin Odoo, sobre una tabla con 10.000 filas, un hueco de 500 ids y una fila que ya tenía tipo: asignó tipo a las 9.499 pendientes en 10 lotes, ninguna quedó con un tipo distinto de su valor viejo, la fila que ya tenía tipo no cambió, y la segunda ejecución dio 0 filas en 0 lotes. Esto comprueba el SQL, no reemplaza el ensayo con Odoo: ese tiempo (0,055 s) es solo el de las sentencias, sin cargar Odoo ni el resto de la actualización.
-- **Pendiente: el ensayo con 10.000 inspecciones.** Los tiempos se completan aquí cuando se corran los pasos de arriba, junto con la máquina donde se midieron (procesador, memoria y disco):
+Medido el 2026-10-20 con los pasos de arriba, en un portátil: Intel Core i5-7300U (4 hilos, 2,6 GHz), 7,7 GB de memoria para WSL 2 y Docker, disco virtual de WSL 2 (ext4), PostgreSQL 16.15 y Odoo 18.0 de la imagen del repositorio. En el servidor del cliente los tiempos serán otros: por eso el plan pide repetir el ensayo en una copia de su base.
 
 | Medición | Resultado |
 |---|---|
-| Generar 10.000 inspecciones (paso 4) | pendiente |
-| Respaldo (paso 5) | pendiente |
-| Actualización completa con `./odoo update` (paso 6) | pendiente |
-| Migración del tipo, según el registro (paso 6) | pendiente |
-| Memoria máxima del proceso de actualización (paso 6) | pendiente |
-| Segunda actualización (paso 7) | pendiente |
-| Restauración (paso 8) | pendiente |
+| Instalar el módulo en `18.0.1.0.0` en una base nueva (paso 3) | 48,1 s |
+| Generar 10.000 inspecciones con su checklist, 50.000 líneas (paso 4) | 40,9 s (el script: 37,8 s, 264 por segundo; memoria máxima 136 MB) |
+| Respaldo: base de 2,4 MB y filestore de 0,9 MB (paso 5) | 1,4 s |
+| Actualización completa con `./odoo update` (paso 6) | 8,8 s |
+| Migración del tipo, según el registro (paso 6) | 0,29 s: 10.000 inspecciones en 10 lotes de 1.000 |
+| Memoria máxima del proceso de actualización (paso 6) | 131 MB |
+| Segunda actualización (paso 7) | 8,0 s: 0 inspecciones en 0 lotes |
+| Restauración en otra base (paso 8) | 28,5 s |
+
+Conteos: antes de actualizar, 4.096 `car`, 2.941 `motorcycle`, 2.008 `truck` y 955 `other`. Después, cada valor con el mismo conteo y su tipo (`car -> Carro`, `motorcycle -> Moto`, `truck -> Camión`, `other -> Otro`) y 0 inspecciones sin tipo. La segunda actualización dejó los conteos iguales, y la base restaurada dio los mismos conteos que antes de actualizar y los mismos 162 archivos del filestore.
+
+El ensayo completo se corrió tres veces. En las dos primeras falló el respaldo (ver [Supuestos y limitaciones](#supuestos-y-limitaciones)) y la migración del tipo tardó 0,22 s y 0,27 s. La tabla es de la tercera corrida, que hizo todos los pasos.
+
+### Cómo se verificó (tramo C)
+
+- Pruebas en una base nueva: `0 failed, 0 error(s) of 29 tests`. Son 7 pruebas nuevas en `tests/test_vehicle_type_migration.py`:
+  - lotes de 1 dan lo mismo que uno solo;
+  - 33 inspecciones en lotes de 7 son 5 lotes y ninguna queda sin tipo;
+  - una fila con tipo dentro de un lote no se toca;
+  - una segunda ejecución por lotes no cambia nada («0 lotes»);
+  - un tamaño de lote 0 o negativo se rechaza antes de tocar datos;
+  - el registro trae el tiempo y la memoria.
+- La primera ejecución en Odoo dio `1 failed of 29`: la prueba de lotes creaba 25 inspecciones nuevas en lugar de las 29 que dice su descripción. Era un error de la prueba, no de la migración; se corrigió y la prueba ahora verifica la cantidad.
+- Para saber que las pruebas no pasan de casualidad, se rompió el código a propósito dos veces:
+  - sin límite superior del lote falló la prueba de los 5 lotes;
+  - con el `UPDATE` sin la condición de tipo vacío falló la de la fila que ya tenía tipo.
+- Linter del repositorio: solo los dos avisos que el módulo ya tenía.
+- Las dos reversiones de `MIGRATION_PLAN.md` se probaron en la base del ensayo:
+  - **A.** Con una inspección con el valor `van`, la actualización se detuvo con «No se puede migrar el tipo de vehículo: hay inspecciones con valores que no tienen destino en el catálogo (van: 1)» y la base quedó igual, en `18.0.1.0.0`.
+  - **B.** Restaurar el respaldo sobre la base ya migrada tardó 37,2 s y la dejó igual que antes de actualizar.
+- Verificación en el navegador, en la base restaurada del ensayo y migrada (10.000 inspecciones): la columna *Tipo de vehículo* llena en la lista, el agrupado por tipo con los mismos conteos del ensayo, tres inspecciones antiguas (aprobada, borrador y rechazada) con su vehículo y su tipo, y el catálogo en *Configuration → Tipos de vehículo*.
+- Antes de correr Odoo, el SQL de los lotes ya se había probado solo en PostgreSQL 16, sobre una tabla de 10.000 filas con un hueco de 500 ids y una fila con tipo: asignó tipo a las 9.499 pendientes en 10 lotes, no tocó la fila con tipo y la segunda ejecución dio 0 filas.
 
 ## Supuestos y limitaciones
 
@@ -221,6 +250,7 @@ Qué se espera:
 - Desde `18.0.1.1.0`, quien lea `vehicle_type` desde otro sistema (por ejemplo, por RPC) recibe un registro del catálogo y no el texto `'car'`.
 - Un valor viejo sin destino en el catálogo detiene la actualización en lugar de mandarlo a «Otro»: así ninguna inspección queda con un tipo equivocado sin aviso.
 - Tramo C: los lotes no confirman por separado. La migración entera es una transacción, para que un fallo la deshaga completa. Con 10.000 inspecciones no es un problema, pero las filas quedan bloqueadas hasta que termina la actualización, por eso el plan pide que nadie use Odoo durante la ventana. Para tablas de millones de filas habría que evaluar confirmar por lotes fuera de `-u`, y eso pierde la reversión automática.
+- Tramo C: el respaldo y la restauración usan `pg_dump`, `pg_restore` y una copia del filestore con `tar`, no el script `scripts/odoo_backup` del repositorio. Ese script falla en este entorno al generar el volcado: pasa el puerto de la base como número a `shlex.quote`, que solo acepta texto (`TypeError` en la línea 279). Como `./odoo restore` espera el `.zip` que produce ese script, tampoco se usa. El script es del repositorio y no se modificó.
 - Tramo C: el lote de 1.000 es un valor fijo en el código. No se expuso como parámetro porque con este volumen no cambia el resultado; se ajusta en `DEFAULT_BATCH_SIZE` si una base lo necesitara.
 - En la 16, `states=` en el campo hacía de solo lectura el vehículo y el tipo en cualquier vista que los mostrara. En la 18 esa regla está en el formulario de este módulo, que es la única vista donde se editan. Una vista nueva que los muestre editables tendría que repetir `readonly="state != 'draft'"`.
 - Al crear una inspección, el inspector solo puede elegir vehículos de los que es conductor. El grupo *Inspector* incluye el grupo de usuario de Flota, y Flota tiene la regla `fleet_rule_vehicle_visibility_user` (`[('driver_id', '=', user.partner_id.id)]`). La regla es la misma en Odoo 16 y en 18, así que la migración no cambia este comportamiento. Si el supervisor le asigna una inspección de otro vehículo, el inspector sí puede abrirla e iniciarla. Para que elija cualquier vehículo, hay que ponerlo como conductor o darle un permiso mayor en Flota; se deja como pregunta para el cliente.

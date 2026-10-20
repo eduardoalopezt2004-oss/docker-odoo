@@ -72,6 +72,9 @@ Resúmenes, no citas textuales:
    - La IA no empezó hasta tener el tramo B en el repositorio: el C modifica su script de migración, y escribirlo sin verlo habría sido adivinar nombres.
    - Con el B integrado, propuso el plan: lotes por id dentro de la transacción de `-u`, generador de 10.000 inspecciones en `18.0.1.0.0`, segunda ejecución real volviendo la versión del módulo a `18.0.1.0.0`, y `MIGRATION_PLAN.md`.
 2. Aprobé el plan.
+3. Terminar el tramo C: correr las pruebas en Odoo, hacer el ensayo con 10.000 inspecciones e integrarlo.
+   - Decidí rebasar la rama sobre la principal en lugar de un merge, porque todavía no se había revisado.
+   - La IA corrió las pruebas, el ensayo completo y las dos reversiones del plan, y corrigió lo que falló (abajo).
 
 ## Qué decidió la IA y aprobé (tramo C)
 
@@ -83,11 +86,15 @@ Resúmenes, no citas textuales:
 
 ## Lo que la IA hizo mal (tramo C)
 
-- En una prueba nueva esperaba 29 inspecciones migradas, pero las 4 que crea la preparación de la clase también quedan sin tipo: eran 33. Lo vio al releer la prueba antes de escribir el código y la corrigió en el mismo commit de pruebas.
+- En la prueba de lotes, al releerla antes de escribir el código, cambió el resultado esperado de 29 a 33 (las 4 inspecciones de la preparación de la clase también quedan sin tipo), pero no la cantidad de inspecciones nuevas: la lista armaba 25, no 29. La primera ejecución en Odoo dio `1 failed of 29` (29 en lugar de 33). La IA reprodujo la preparación en una base aparte para descartar un fallo de la migración y corrigió la prueba, que ahora verifica la cantidad.
+- Escribió en el README y en `MIGRATION_PLAN.md` comandos de respaldo y restauración sin ejecutarlos: a `scripts/odoo_backup` le faltaba un argumento obligatorio y, con él, el script del repositorio falla igual (`TypeError` al armar el comando de `pg_dump`). `./odoo restore` y `./odoo psql remove` tampoco se habían probado. Apareció en el ensayo: el respaldo no se hizo. Se pasó a `pg_dump`, `pg_restore`, `dropdb` y `tar`, y se repitió el ensayo completo.
 - La primera versión del `UPDATE` por lotes armaba el SQL con `%`. No había riesgo real (solo marcadores fijos), pero el linter de Odoo lo marca como posible inyección. Se cambió por `odoo.tools.SQL`.
 - El plan de migración mostraba una línea de registro de ejemplo con tiempos y memoria inventados. Como el criterio pide tiempos medidos y no supuestos, se cambió por marcadores (`<S> s`, `<M> MB`).
 
-## Lo que no se pudo verificar (tramo C)
+## Cómo se verificó (tramo C)
 
-- No se corrió Odoo: las pruebas nuevas no se han ejecutado y el ensayo con 10.000 inspecciones está pendiente. Las tablas de tiempos del README y de `MIGRATION_PLAN.md` dicen "pendiente" hasta que se midan; no se completaron con estimaciones.
-- Solo se pasó un análisis estático básico con `ruff`. El linter del repositorio (`pylint` con `pylint_odoo`) no estaba instalado.
+- Pruebas en una base nueva: `0 failed, 0 error(s) of 29 tests`. Para saber que no pasan de casualidad, la IA rompió el código dos veces (sin límite del lote y sin la condición de tipo vacío) y cada vez falló la prueba que lo cubre.
+- Linter del repositorio: solo los dos avisos que el módulo ya tenía.
+- Ensayo con 10.000 inspecciones con los pasos del README: la migración asignó su tipo a las 10.000 en 10 lotes, en 0,29 s; la segunda ejecución no cambió nada y la base restaurada dio los mismos conteos. Los tiempos están en el README y en `MIGRATION_PLAN.md`.
+- Las dos reversiones del plan, probadas en la base del ensayo: una actualización que falla deja la base igual, y restaurar el respaldo sobre la base migrada la deja como antes.
+- Verifiqué en el navegador la base del ensayo, restaurada y migrada con las 10.000 inspecciones: el tipo en la lista, el agrupado por tipo con los conteos del ensayo, tres inspecciones antiguas en estados distintos con su tipo y el catálogo de tipos.

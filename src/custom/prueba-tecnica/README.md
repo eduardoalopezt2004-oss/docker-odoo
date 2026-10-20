@@ -9,7 +9,7 @@ Esta carpeta es el directorio de addons de la prueba y tiene los cuatro módulos
 | Ejercicio | Módulo | Tramo A | Tramo B | Tramo C | Documentos clave |
 |---|---|---|---|---|---|
 | 1. Integración con API para una tienda en línea | `shop_integration_api` | Hecho | Hecho | No iniciado | README con el contrato, códigos HTTP y ejemplos para la tienda |
-| 2. Migración del módulo de inspecciones | `fleet_inspection` | Hecho | Hecho | Hecho, tiempos del ensayo pendientes de medir | README con la tabla de cambios de versión, script en `migrations/`, `MIGRATION_PLAN.md` |
+| 2. Migración del módulo de inspecciones | `fleet_inspection` | Hecho | Hecho | Hecho | README con la tabla de cambios de versión y el ensayo medido con 10.000 inspecciones, script en `migrations/`, `MIGRATION_PLAN.md` |
 | 3. Ticket urgente T-200 | `sale_commission` | Hecho | Hecho | Hecho | `INCIDENT.md`, scripts de datos, PR de la rama `hotfix/T-200` |
 | 4. Solicitudes de pago con aprobación | `payment_request` | Hecho | Hecho | No iniciado | README con «Supuestos y preguntas al cliente» |
 
@@ -43,7 +43,7 @@ Cada ejercicio se trabajó en su propia rama y se integró con un pull request (
 
 El comando termina con código 0 aunque haya pruebas con error: hay que leer la línea `... of N tests` del final.
 
-Resultado de los cuatro módulos juntos en una base nueva de Odoo 18.0: `0 failed, 0 error(s) of 136 tests`.
+Resultado de los cuatro módulos juntos en una base nueva de Odoo 18.0: `0 failed, 0 error(s) of 143 tests`.
 
 ## Supuestos del entorno
 

@@ -23,9 +23,13 @@ Variables que usan los comandos (se definen una vez en la terminal):
 ```bash
 BASE=<nombre_de_la_base_del_cliente>
 SVC="docker compose -f docker-compose.generated.yml exec -T odoo-prueba-tecnica"
+DB="docker compose -f docker-compose.generated.yml exec -T db-pg16"
+FS=/home/odoo/data/filestore
 CHECK=src/custom/prueba-tecnica/fleet_inspection/scripts/check_vehicle_types.py
 mkdir -p ~/migracion_fleet
 ```
+
+`db-pg16` es el servicio de PostgreSQL de la instancia y `FS` la carpeta del filestore dentro del contenedor de Odoo; si la instancia del cliente usa otros, se cambian aquí. El respaldo se hace con `pg_dump` y `tar` porque el script `scripts/odoo_backup` del repositorio falla en este entorno (ver *Supuestos y limitaciones* en el README).
 
 ## Antes del día
 
@@ -41,20 +45,22 @@ mkdir -p ~/migracion_fleet
 2. Respaldar base y filestore:
 
    ```bash
-   scripts/odoo_backup backup prueba-tecnica -d $BASE -p ~/migracion_fleet/
+   $DB pg_dump -U odoo -Fc -d $BASE > ~/migracion_fleet/$BASE.dump
+   $SVC tar czf - -C $FS $BASE > ~/migracion_fleet/filestore.tgz
    ls -lh ~/migracion_fleet/
    ```
 
-   **Esperado:** un archivo `.zip` con tamaño razonable (no de pocos KB). Anotar su nombre: `<respaldo.zip>`.
+   **Esperado:** dos archivos, `$BASE.dump` y `filestore.tgz`, con tamaño razonable (no de pocos KB).
 
 3. **Verificar que el respaldo se puede restaurar**, en una base aparte:
 
    ```bash
-   ./odoo restore prueba-tecnica -z ~/migracion_fleet/<respaldo.zip> -d ${BASE}_verif
+   $DB createdb -U odoo ${BASE}_verif
+   $DB pg_restore -U odoo -d ${BASE}_verif --no-owner < ~/migracion_fleet/$BASE.dump
    $SVC odoo shell -d ${BASE}_verif --no-http < $CHECK | tee ~/migracion_fleet/0_respaldo.txt
    ```
 
-   **Esperado:** mismo total y mismos conteos que el paso 2 en la base real. Después se borra la copia: `./odoo psql remove prueba-tecnica -d ${BASE}_verif`.
+   **Esperado:** mismo total y mismos conteos que el paso 2 en la base real. Después se borra la copia: `$DB dropdb -U odoo ${BASE}_verif`.
 
 ## Paso 2. Verificación previa
 
@@ -134,7 +140,7 @@ Si todo coincide: avisar al cliente de que Odoo está disponible y guardar la ca
 
 ### A. La actualización falló (paso 3)
 
-Odoo hace la actualización en una sola transacción: si falla, no queda nada a medias.
+Odoo hace la actualización en una sola transacción: si falla, no queda nada a medias. Se probó en el ensayo con una inspección con el valor `van`: la actualización se detuvo con `No se puede migrar … (van: 1)` y la base quedó en `18.0.1.0.0`, con los mismos conteos.
 
 1. Confirmar que la base quedó como antes:
 
@@ -159,30 +165,37 @@ Si el paso 1 de esta sección no da lo esperado, seguir con la reversión B.
 
 Se restaura el respaldo del paso 1. **Todo lo que se haya registrado en Odoo después del respaldo se pierde**: si los usuarios ya trabajaron, decidir con el cliente antes de restaurar.
 
+Odoo se detiene antes de borrar la base porque PostgreSQL no borra una base con conexiones abiertas.
+
 ```bash
 git checkout <ref_anterior>
-./odoo psql remove prueba-tecnica -d $BASE
-./odoo restore prueba-tecnica -z ~/migracion_fleet/<respaldo.zip> -d $BASE
-./odoo restart prueba-tecnica
+docker compose -f docker-compose.generated.yml stop odoo-prueba-tecnica
+$DB dropdb -U odoo $BASE
+$DB createdb -U odoo $BASE
+$DB pg_restore -U odoo -d $BASE --no-owner < ~/migracion_fleet/$BASE.dump
+./odoo start prueba-tecnica
+$SVC rm -rf $FS/$BASE
+$SVC sh -c "mkdir -p $FS/$BASE && tar xzf - -C $FS/$BASE --strip-components=1" < ~/migracion_fleet/filestore.tgz
 $SVC odoo shell -d $BASE --no-http < $CHECK
 ```
 
-**Esperado:** igual que `1_antes.txt`.
+**Esperado:** igual que `1_antes.txt`. En el ensayo con 10.000 inspecciones, estos comandos tardaron 37,2 s y dejaron la base igual que antes de actualizar.
 
 No se ofrece deshacer la migración en la misma base, cambiando la columna de vuelta a texto. Sería posible porque el valor viejo queda en `vehicle_type_legacy`, pero ese camino no está probado y restaurar el respaldo sí.
 
 ## Tiempos del ensayo
 
-Medidos con 10.000 inspecciones en la base de ensayo. El detalle y los comandos están en el README.
+Medidos el 2026-10-20 con 10.000 inspecciones (50.000 líneas de checklist) en la base de ensayo, en un portátil con Intel Core i5-7300U y 7,7 GB de memoria para WSL 2 y Docker. El detalle, la máquina y los comandos están en el README.
 
 | Paso | Tiempo |
 |---|---|
-| Respaldo (`odoo_backup`) | pendiente de medir |
-| Actualización completa (`./odoo update`, paso 3.2) | pendiente de medir |
-| Migración del tipo dentro de la actualización (línea `Tipo de vehículo migrado`) | pendiente de medir |
-| Memoria máxima del proceso de actualización | pendiente de medir |
-| Segunda actualización (idempotencia) | pendiente de medir |
-| Restauración (`./odoo restore`) | pendiente de medir |
+| Respaldo (`pg_dump` y filestore, paso 1.2) | 1,4 s |
+| Actualización completa (`./odoo update`, paso 3.2) | 8,8 s |
+| Migración del tipo dentro de la actualización (línea `Tipo de vehículo migrado`) | 0,29 s, en 10 lotes de 1.000 |
+| Memoria máxima del proceso de actualización | 131 MB |
+| Segunda actualización (idempotencia) | 8,0 s, 0 inspecciones cambiadas |
+| Restauración en otra base (`createdb`, `pg_restore` y filestore) | 28,5 s |
+| Reversión B completa, sobre la base ya migrada | 37,2 s |
 
 ## Equivalente sin el CLI del repositorio
 
