@@ -9,9 +9,8 @@
   - Revisión obligatoria de cada tramo contra los criterios del enunciado antes de cerrarlo.
   - Condición de cierre: pruebas en base nueva, linter del repositorio y mi verificación en el
     navegador antes de cada push.
-  - En el tramo B usé créditos de Claude Code en la nube para el trabajo más pesado (escribir el
-    código y las pruebas), para optimizar tiempo y créditos. Después lo probé y ajusté en el
-    entorno local.
+  - Usé créditos de Claude Code en la nube para parte del trabajo más pesado (escribir código y
+    pruebas), para optimizar tiempo y créditos. Después lo probé y ajusté en el entorno local.
 
 Delegué en la IA la redacción de código, pruebas y documentos, dentro de esas reglas. Mi trabajo
 fue definir el método, revisar y aprobar cada propuesta, decidir los supuestos y verificar el
@@ -87,6 +86,8 @@ Resúmenes, no citas textuales:
    - La IA propuso el plan sobre el código integrado y dejó tres decisiones abiertas: qué hacer si falta la tasa del día, cómo numerar con varias compañías y qué ve quien llega segundo cuando dos personas actúan a la vez.
 2. Le pedí desarrollar mejor las opciones, con ejemplos, sin etiquetarlas con letras y nombrando siempre ejercicio y tramo. Con eso decidí (abajo).
 3. "Haz el ejercicio 4, tramo C, como lo hablamos, y agrega los supuestos y preguntas que conversamos."
+4. Antes de subir nada, pedí revisar todo el tramo contra el enunciado y contra el código de Odoo 18, sin tocar el repositorio mientras estaba ocupado, y mostrarme el plan con las decisiones que me tocaban.
+   - La IA encontró los errores de abajo y me planteó las decisiones que me tocaban.
 
 ## Qué decidí yo (tramo C)
 
@@ -96,6 +97,10 @@ Resúmenes, no citas textuales:
 - **Aviso inmediato** para la segunda persona cuando dos actúan a la vez sobre la misma solicitud.
 - **Preguntas nuevas para Carolina:** si llevan la contabilidad en Odoo, si manejan más de una empresa y si cada una necesita su numeración, y la pregunta de la tasa ampliada (qué tasa, de qué fuente, si ya la registran en Odoo, quién la carga y si les serviría tomarla automáticamente). También que el PDF muestre el monto pagado y la tasa.
 - **Orden de trabajo:** primero lo que pide el enunciado y al final la numeración por compañía, que es un agregado nuestro y lo primero que se recortaría por tiempo.
+- **La compañía queda fija desde que se crea la solicitud**, no solo desde que se envía, porque el número lleva el código de esa compañía.
+- **La tasa exacta también cuando la solicitud y el diario usan la misma moneda extranjera**, porque el asiento en la moneda de la compañía se calcula con esa tasa.
+- **Una prueba de concurrencia de punta a punta:** el aprobador en dos pestañas a la vez, con los métodos reales y dos conexiones a la base.
+- **Reusar el código de una compañía queda como limitación escrita**, sin una regla nueva.
 
 ## Lo que la IA hizo mal (tramo C)
 
@@ -103,6 +108,11 @@ Resúmenes, no citas textuales:
 - Planteó las decisiones abiertas con letras («2a», «3a»), y la primera vez sin el contexto suficiente para decidir: no explicaba qué pasaba con cada opción ni a quién afectaba. Tuve que pedirle que las desarrollara y que dejara de usar letras para algo que no fueran los tramos.
 - No había escrito como supuesto que la contabilidad se lleva en Odoo, aunque el tramo B ya dependía de eso al crear un `account.payment`. Salió al conversar el C y quedó como supuesto y como pregunta 11.
 - Al escribir la prueba del mensaje de tasa faltante, la fecha del mensaje dependía del idioma del usuario. Se fijó el formato día/mes/año en el código para que el mensaje y la prueba no cambien según el idioma.
+- Entregó el tramo sin ejecutar las pruebas en Odoo ni el linter del repositorio. Lo que sigue lo encontró al revisar el tramo contra el enunciado y contra el código de Odoo 18, antes de ejecutar nada:
+  - La comprobación de la tasa del día buscaba en la compañía de la solicitud y en las tasas sin compañía, pero Odoo 18 convierte con la tasa de la compañía principal y la prefiere aunque sea más vieja (`res.currency._get_rates`). Odoo solo deja cargar tasas en la compañía principal, así que en una sucursal el pago se habría bloqueado siempre. Y con una tasa sin compañía de ese día más otra de la compañía más vieja, se habría pagado con la vieja sin aviso. Se agregaron dos pruebas y se corrigió.
+  - La compañía se podía cambiar en borrador, aunque el número ya llevaba el código de la compañía original.
+  - Si alguien quitaba `NOWAIT`, la prueba de concurrencia se habría quedado esperando para siempre en lugar de fallar. Ahora cada conexión tiene un límite de espera y la prueba mide que el aviso sea inmediato.
+  - El aviso de tasa faltante y los documentos mandaban a «Contabilidad → Configuración → Monedas»; en Odoo 18 Community es Facturación → Configuración → Contabilidad → Monedas. El comando de pruebas del README estaba mal escrito. `ARCHITECTURE.md` decía que `currency_rate_live` es de Enterprise «en algunas versiones» (no viene en Odoo 18 Community) y no explicaba que, al convertir el error de bloqueo en aviso, se renuncia al reintento automático de Odoo.
 
 ## Cómo se verificó (tramo C)
 

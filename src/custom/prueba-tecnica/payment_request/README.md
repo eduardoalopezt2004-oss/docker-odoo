@@ -53,15 +53,15 @@ Ejercicio 4 de la prueba técnica. Hoy las solicitudes de pago a proveedores lle
 Las decisiones, con lo que se descartó y por qué, están en [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 - **Pago en otra moneda.** El pago sale en la moneda del diario que elige Tesorería. Una solicitud en dólares pagada desde un banco en bolívares se convierte con la tasa **del día del pago**. Antes de confirmar, el asistente muestra el monto en bolívares y la tasa («1 USD = 40 VES (tasa del 19/10/2026)»). La solicitud y el PDF guardan el monto pagado, su moneda y la tasa usada.
-- **Sin tasa del día, no se paga.** Si no hay tasa cargada para la fecha del pago, el asistente lo avisa y el pago se bloquea con un mensaje que dice qué tasa cargar y dónde (Contabilidad → Configuración → Monedas). No se usa una tasa anterior, que es lo que haría Odoo por defecto.
-- **Multi-compañía.** Cada solicitud es de una compañía: la activa al crearla, y no cambia después de enviarla. Cada compañía tiene sus niveles, y el aprobador de un nivel debe tener acceso a su compañía. Un usuario solo ve solicitudes y niveles de las compañías que tiene activas. Quien trabaja con varias compañías puede filtrar y agrupar por compañía.
-- **Numeración por compañía.** En la ficha de la compañía (Ajustes → Compañías) hay un campo «Código para solicitudes de pago». Una compañía con código, por ejemplo DA, numera con su propio contador seguido: DA/SP/2026/0001, DA/SP/2026/0002. Sin código, sigue con el contador general: SP/2026/0001. Cambiar el código solo afecta a las solicitudes nuevas. El número nunca se repite.
+- **Sin tasa del día, no se paga.** Si no hay tasa cargada para la fecha del pago, el asistente lo avisa y el pago se bloquea con un mensaje que dice qué tasa cargar y dónde (Facturación → Configuración → Contabilidad → Monedas, un menú de quien administra la contabilidad). No se usa una tasa anterior, que es lo que haría Odoo por defecto. Vale también si la solicitud y el diario usan la misma moneda extranjera: el monto no cambia, pero el asiento en la moneda de la compañía se calcula con esa tasa.
+- **Multi-compañía.** Cada solicitud es de una compañía: la activa al crearla, y después no cambia, porque el número lleva el código de esa compañía. Cada compañía tiene sus niveles, y el aprobador de un nivel debe tener acceso a su compañía. Un usuario solo ve solicitudes y niveles de las compañías que tiene activas. Quien trabaja con varias compañías puede filtrar y agrupar por compañía.
+- **Numeración por compañía.** En la ficha de la compañía (Ajustes → Usuarios y compañías → Compañías) hay un campo «Código para solicitudes de pago». Una compañía con código, por ejemplo DA, numera con su propio contador seguido: DA/SP/2026/0001, DA/SP/2026/0002. Sin código, sigue con el contador general: SP/2026/0001. Cambiar el código solo afecta a las solicitudes nuevas. El número nunca se repite.
 - **Dos personas a la vez.** Si dos personas actúan sobre la misma solicitud al mismo tiempo (aprobar y rechazar en dos pestañas, un doble clic en «Registrar pago»), solo una lo logra. La otra recibe al instante «Otra persona está procesando esta solicitud. Recarga la página e intenta de nuevo.» y no se hace nada: no se crean dos pagos.
 - **Pago fallido.** Si el pago falla (al publicarlo o por falta de tasa), la solicitud sigue aprobada y no queda ningún pago suelto.
 
 ### Cómo se aplica cada regla (tramo C)
 
-- La tasa se busca con un registro de `res.currency.rate` de la fecha exacta, para cada moneda distinta de la de la compañía. Con la tasa confirmada, la conversión la hace `res.currency._get_conversion_rate`. Si la solicitud y el diario están en la misma moneda, no hay conversión ni tasa que exigir.
+- Para cada moneda distinta de la de la compañía se revisa la tasa de `res.currency.rate` con que Odoo 18 va a convertir: la de la compañía principal o, si no hay, la que no tiene compañía, la más reciente hasta la fecha del pago. Tiene que ser de esa fecha. Odoo solo deja cargar tasas en la compañía principal, así que una sucursal usa las de su principal. Con la tasa confirmada, la conversión la hace `res.currency._get_conversion_rate`. Si la solicitud y el diario están en la misma moneda no hay conversión, y la tasa del día solo se exige si esa moneda no es la de la compañía.
 - La tasa usada queda en `payment_rate`, un campo del sistema como el aprobador: ningún usuario lo escribe.
 - Multi-compañía: reglas de registro **globales** `[('company_id', 'in', company_ids)]` en solicitudes y niveles. Se suman a las de los grupos, así que «Aprobador y Tesorería ven todas» pasa a ser «todas las de sus compañías activas».
 - El diario del pago tiene que ser de la compañía de la solicitud; el asistente solo ofrece esos.
@@ -157,18 +157,21 @@ En `tests/` (la preparación común está en `tests/common.py`):
 |---|---|
 | USD pagada desde un diario en VES con la tasa del día del pago | `test_usd_request_paid_from_ves_journal_at_payment_date_rate`, `test_rate_is_the_one_of_the_payment_date` |
 | Sin tasa del día no se paga, aunque haya una anterior | `test_missing_rate_on_payment_date_blocks_payment` |
+| Se revisa la misma tasa con que convierte Odoo, también en una sucursal | `test_rate_check_looks_at_the_rate_odoo_converts_with`, `test_branch_pays_with_the_rates_of_its_main_company` |
 | El asistente muestra monto y tasa antes de confirmar | `test_wizard_shows_amount_and_rate_before_paying` |
-| Misma moneda: sin conversión ni tasa | `test_same_currency_needs_no_rate` |
+| Misma moneda de la compañía: sin conversión ni tasa | `test_same_currency_needs_no_rate` |
+| Misma moneda extranjera: sin conversión, con la tasa del día | `test_same_foreign_currency_needs_the_rate_of_the_day` |
 | Pago fallido: la solicitud sigue aprobada | `test_failed_payment_in_ves_leaves_request_approved` (y `test_pay_is_all_or_nothing` del tramo B) |
 | PDF con monto pagado y tasa | `test_report_shows_amount_paid_and_rate` |
 | Un usuario de la compañía B no ve nada de la A | `test_user_of_company_b_sees_nothing_of_company_a`, `test_user_with_both_companies_sees_only_the_active_ones` |
 | Niveles por compañía | `test_level_of_the_request_company_is_used`, `test_level_approver_must_have_access_to_its_company` |
-| La compañía no cambia después de enviar; filtro por compañía | `test_company_cannot_change_after_submit`, `test_search_view_groups_by_company_for_multi_company_users` |
-| Concurrencia con dos conexiones reales a PostgreSQL | `test_second_person_gets_an_immediate_notice`, `test_lock_is_free_when_nobody_else_has_it` |
+| La compañía no cambia desde que se crea; filtro por compañía | `test_company_is_fixed_from_creation`, `test_company_cannot_change_after_submit`, `test_search_view_groups_by_company_for_multi_company_users` |
+| El aprobador en dos pestañas a la vez: gana una, con los métodos reales | `test_two_tabs_of_the_approver_only_one_wins` |
+| Concurrencia con dos conexiones reales a PostgreSQL; el aviso es inmediato | `test_second_person_gets_an_immediate_notice`, `test_lock_is_free_when_nobody_else_has_it` |
 | Todo cambio de estado pasa por el bloqueo antes de hacer nada | `test_every_state_change_takes_the_lock_before_doing_anything` |
 | Numeración por compañía con código | `test_company_without_code_keeps_the_general_counter`, `test_each_company_with_code_has_its_own_consecutive_counter`, `test_changing_the_code_only_affects_new_requests`, `test_code_format_and_uniqueness`, `test_requester_without_admin_rights_gets_a_number`, `test_numbers_are_unique_in_the_database` |
 
-Las pruebas de concurrencia confirman datos en la base con conexiones aparte, porque un bloqueo entre dos personas no se puede probar dentro de una sola transacción. Al terminar borran esos datos.
+Las pruebas de concurrencia confirman datos en la base con conexiones aparte, porque un bloqueo entre dos personas no se puede probar dentro de una sola transacción. Al terminar borran esos datos. Cada conexión tiene un límite de espera de 5 segundos: si alguien quitara `NOWAIT`, la prueba fallaría en lugar de quedarse esperando.
 
 ## Cómo se verificó (tramo A)
 
@@ -230,9 +233,9 @@ Las pruebas de concurrencia confirman datos en la base con conexiones aparte, po
 ## Supuestos (tramo C)
 
 - **La contabilidad se lleva en Odoo**, con diarios de banco por moneda (por ejemplo, uno en bolívares y otro en dólares). El pago que crea el módulo es el registro contable. Si la contabilidad se llevara en otro sistema, ese pago lo duplicaría (pregunta 11). Este supuesto ya estaba en el tramo B, al crear un `account.payment`, pero no estaba escrito.
-- **La tasa del día se registra en Odoo** (Contabilidad → Configuración → Monedas), de la fuente que use el cliente, a mano o con alguna actualización automática. El módulo no obtiene tasas de ninguna fuente externa y no asume cuál es (pregunta 4).
+- **La tasa del día se registra en Odoo** (Facturación → Configuración → Contabilidad → Monedas), de la fuente que use el cliente, a mano o con alguna actualización automática. El módulo no obtiene tasas de ninguna fuente externa y no asume cuál es (pregunta 4).
 - **El pago usa la tasa exacta del día del pago.** Si falta, el pago se bloquea con un aviso en lugar de usar una tasa anterior.
-- **La moneda del pago es la del diario.** Si Tesorería paga en dólares desde un banco en dólares, no hay conversión.
+- **La moneda del pago es la del diario.** Si Tesorería paga en dólares desde un banco en dólares, no hay conversión; si la compañía lleva la contabilidad en bolívares, igual se exige la tasa del día para el asiento.
 - **Las solicitudes y los niveles son por compañía**, aunque el correo no dice que el cliente tenga más de una (pregunta 12). Con una sola compañía, nada cambia para el usuario.
 - **Numeración:** con código, cada compañía tiene su contador (DA/SP/2026/0001); sin código, sigue el contador general (SP/2026/0001). Una solicitud de pago es un documento interno, no fiscal: no se asume ninguna exigencia legal de numeración (pregunta 12).
 - **Si dos personas actúan a la vez**, la segunda recibe un aviso inmediato y vuelve a intentar. No se espera a que termine la primera.
@@ -258,9 +261,9 @@ Las pruebas de concurrencia confirman datos en la base con conexiones aparte, po
 ## Limitaciones conocidas
 
 - El aprobador de un nivel puede dejar de serlo (por ejemplo, se va de la empresa): las solicitudes ya asignadas a él quedan esperándolo. No hay reasignación; hoy habría que rechazar y volver a crear la solicitud.
-- Tramo C: si la solicitud y el diario están en la misma moneda extranjera (por ejemplo, dólares desde un banco en dólares con la compañía en bolívares), el pago no tiene conversión y no se exige tasa del día. El asiento contable en la moneda de la compañía lo calcula Odoo con su propia regla, la última tasa disponible.
 - Tramo C: si la primera persona falla (por ejemplo, porque faltaba la tasa), la segunda, que recibió el aviso de «otra persona está procesando», tiene que volver a intentar a mano.
 - Tramo C: el contador propio de una compañía se crea con su primera solicitud. Si dos personas de esa compañía crean su primera solicitud en el mismo instante, podrían crearse dos contadores; el número único en la base impide que se repita un número, y una de las dos personas recibiría un error y volvería a intentar.
+- Tramo C: un código que otra compañía ya usó (por ejemplo, la compañía X tuvo DA y lo cambió, y la compañía Y toma DA) arranca un contador nuevo en 0001 y chocaría con números que ya existen. El número único en la base impide la repetición, pero esa solicitud no se puede crear. Conviene no reusar un código.
 - Tramo C: al actualizar desde 18.0.1.1.0, las solicitudes existentes quedan en la compañía principal. Si el cliente ya usaba varias compañías, habría que revisar a cuál corresponde cada una.
 - El reporte no permite imprimir borradores ni enviadas: el botón solo aparece en solicitudes aprobadas o pagadas.
 - Tesorería registra el pago pero, sin permisos de Contabilidad, no puede abrirlo: ve su número y su fecha en la solicitud. Para abrirlo hace falta Facturación o Contabilidad de solo lectura.
