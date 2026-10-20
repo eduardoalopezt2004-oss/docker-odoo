@@ -6,6 +6,9 @@ from odoo.tools import SQL
 
 APPROVER_GROUP = "payment_request.group_payment_approver"
 TREASURY_GROUP = "payment_request.group_payment_treasury"
+# Código de las secuencias propias de cada compañía con código. Es distinto del contador general
+# ("payment.request") para que next_by_code nunca tome una por la otra.
+COMPANY_SEQUENCE_CODE = "payment.request.company"
 
 
 def REJECT_EMAIL_MESSAGE():
@@ -21,6 +24,9 @@ class PaymentRequest(models.Model):
     _inherit = ["mail.thread", "mail.activity.mixin"]
     _order = "id desc"
     _check_company_auto = True
+    _sql_constraints = [
+        ("name_uniq", "unique(name)", "Ya existe una solicitud de pago con ese número."),
+    ]
 
     # Se fijan al crear: si el solicitante cambiara, un aprobador podría aprobar su propia solicitud.
     _FIXED_FIELDS = {"name", "requester_id"}
@@ -124,8 +130,35 @@ class PaymentRequest(models.Model):
             if vals.get("state", "draft") != "draft":
                 raise UserError(_("Una solicitud de pago siempre se crea en borrador."))
             # El número lo pone siempre la secuencia, aunque venga otro en los valores.
-            vals["name"] = self.env["ir.sequence"].next_by_code("payment.request")
+            company = self.env["res.company"].browse(vals["company_id"]) if vals.get("company_id") else self.env.company
+            vals["name"] = self._next_request_number(company)
         return super().create(vals_list)
+
+    @api.model
+    def _next_request_number(self, company):
+        """Número de una solicitud nueva de ``company``.
+
+        Sin código de compañía: contador general, SP/2026/0001, como hasta 18.0.1.1.0. Con código:
+        contador propio de la compañía, DA/SP/2026/0001, que se crea con su primera solicitud.
+        """
+        code = company.payment_request_code
+        if not code:
+            return self.env["ir.sequence"].next_by_code("payment.request")
+        # sudo(): quien pide el pago no puede crear secuencias; solo se usa el contador de esta compañía.
+        Sequence = self.env["ir.sequence"].sudo()
+        sequence = Sequence.search([("code", "=", COMPANY_SEQUENCE_CODE), ("company_id", "=", company.id)], limit=1)
+        if not sequence:
+            sequence = Sequence.create(
+                {
+                    "name": _("Solicitudes de pago de %s", company.name),
+                    "code": COMPANY_SEQUENCE_CODE,
+                    "company_id": company.id,
+                    "prefix": "SP/%(range_year)s/",
+                    "padding": 4,
+                    "use_date_range": True,
+                }
+            )
+        return "%s/%s" % (code, sequence._next())
 
     def write(self, vals):
         if "state" in vals:
