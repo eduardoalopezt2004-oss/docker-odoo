@@ -28,10 +28,11 @@ class PaymentRequest(models.Model):
         ("name_uniq", "unique(name)", "Ya existe una solicitud de pago con ese número."),
     ]
 
-    # Se fijan al crear: si el solicitante cambiara, un aprobador podría aprobar su propia solicitud.
-    _FIXED_FIELDS = {"name", "requester_id"}
+    # Se fijan al crear: si el solicitante cambiara, un aprobador podría aprobar su propia solicitud; y el
+    # número lleva el código de la compañía con que se creó.
+    _FIXED_FIELDS = {"name", "requester_id", "company_id"}
     # Campos que nadie puede cambiar fuera de borrador.
-    _LOCKED_FIELDS = {"company_id", "partner_id", "amount", "currency_id", "date", "concept"}
+    _LOCKED_FIELDS = {"partner_id", "amount", "currency_id", "date", "concept"}
     # Los escribe solo el propio módulo (con sudo()): el aprobador y su fecha, el motivo del rechazo y
     # el pago. Si un usuario los pudiera escribir, podría cambiar quién aprueba o dar por pagada la solicitud.
     _SYSTEM_FIELDS = {"approver_id", "approval_date", "reject_reason", "payment_id", "payment_rate"}
@@ -165,7 +166,7 @@ class PaymentRequest(models.Model):
             # Antes de validar nada: si otra persona está cambiando el estado a la vez, gana una sola.
             self._lock_for_update()
         if self._FIXED_FIELDS.intersection(vals):
-            raise UserError(_("El número y el solicitante de una solicitud no se pueden cambiar."))
+            raise UserError(_("El número, el solicitante y la compañía de una solicitud no se pueden cambiar."))
         if self._SYSTEM_FIELDS.intersection(vals) and not self.env.su:
             raise UserError(_("El aprobador, el motivo de rechazo y el pago los registra el sistema."))
         if self._LOCKED_FIELDS.intersection(vals) and any(request.state != "draft" for request in self):

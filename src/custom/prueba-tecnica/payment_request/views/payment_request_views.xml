@@ -70,7 +70,8 @@
                             <field name="amount" readonly="state != 'draft'"/>
                             <field name="currency_id" readonly="state != 'draft'" options="{'no_create': True}"/>
                             <field name="date" readonly="state != 'draft'"/>
-                            <field name="company_id" groups="base.group_multi_company" readonly="state != 'draft'"
+                            <!-- Solo se elige al crear: el número lleva el código de la compañía. -->
+                            <field name="company_id" groups="base.group_multi_company" readonly="id"
                                    options="{'no_create': True}"/>
                             <field name="approval_date" invisible="not approval_date"/>
                             <field name="payment_id" invisible="1"/>
