@@ -322,7 +322,8 @@ class PaymentRequest(models.Model):
 
         El pago sale en la moneda del diario. Si es distinta de la de la solicitud, el monto se convierte
         con la tasa de ese día exacto. Si falta, se avisa en lugar de usar una anterior, que es lo que
-        haría Odoo por defecto.
+        haría Odoo por defecto. También se exige cuando las dos son la misma moneda extranjera: el monto
+        no cambia, pero el asiento en la moneda de la compañía se calcula con esa tasa.
 
         :return: (moneda del pago, monto en esa moneda, tasa: unidades de la moneda del pago por
             unidad de la moneda de la solicitud)
@@ -332,24 +333,42 @@ class PaymentRequest(models.Model):
         company = self.company_id
         payment_date = fields.Date.to_date(payment_date)
         currency = journal.currency_id or company.currency_id
-        if currency == self.currency_id:
-            return currency, self.amount, 1.0
-        Rate = self.env["res.currency.rate"]
         # Las tasas de Odoo son respecto de la moneda de la compañía: esa no necesita tasa.
         for rated in (self.currency_id | currency) - company.currency_id:
-            domain = [("currency_id", "=", rated.id), ("name", "=", payment_date), ("company_id", "in", [company.id, False])]
-            if not Rate.search_count(domain, limit=1):
-                raise UserError(
-                    _(
-                        "No hay tasa de %(currency)s para el %(date)s en %(company)s. Cárgala en Contabilidad → "
-                        "Configuración → Monedas antes de pagar: el pago usa la tasa de ese día, no una anterior.",
-                        currency=rated.name,
-                        date=payment_date.strftime("%d/%m/%Y"),
-                        company=company.name,
-                    )
-                )
+            self._check_rate_of_the_day(rated, payment_date)
+        if currency == self.currency_id:
+            return currency, self.amount, 1.0
         rate = self.env["res.currency"]._get_conversion_rate(self.currency_id, currency, company, payment_date)
         return currency, currency.round(self.amount * rate), rate
+
+    def _check_rate_of_the_day(self, currency, payment_date):
+        """Falla si la tasa con que Odoo convertirá ``currency`` ese día no es de ese mismo día.
+
+        Repite la búsqueda de ``res.currency._get_rates`` de Odoo 18: tasas de la compañía principal o sin
+        compañía, primero las de la compañía, la más reciente hasta la fecha. Así se revisa la misma tasa
+        que usará la conversión, también en una sucursal (Odoo solo deja cargar tasas en la principal).
+        """
+        main_company = self.company_id.root_id
+        rate = self.env["res.currency.rate"].search(
+            [
+                ("currency_id", "=", currency.id),
+                ("name", "<=", payment_date),
+                ("company_id", "in", [False, main_company.id]),
+            ],
+            order="company_id.id, name desc",
+            limit=1,
+        )
+        if rate.name != payment_date:
+            raise UserError(
+                _(
+                    "No hay tasa de %(currency)s para el %(date)s en %(company)s. Pide a quien administra la "
+                    "contabilidad que la cargue en Facturación → Configuración → Contabilidad → Monedas: el pago "
+                    "usa la tasa de ese día, no una anterior.",
+                    currency=currency.name,
+                    date=payment_date.strftime("%d/%m/%Y"),
+                    company=main_company.name,
+                )
+            )
 
     def _pay(self, journal, payment_date):
         """Registra el pago al proveedor en contabilidad y marca la solicitud como pagada.
