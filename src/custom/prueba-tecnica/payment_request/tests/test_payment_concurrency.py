@@ -39,6 +39,10 @@ class TestPaymentConcurrency(PaymentRequestCommon):
         with sql_db.db_connect(get_db_name()).cursor() as cr:
             cr.execute(SET_LOCK_TIMEOUT)
             env = api.Environment(cr, SUPERUSER_ID, QUIET)
+            # También el rango del año del contador de solicitudes: si lo creara después una solicitud
+            # confirmada en una conexión aparte, la transacción de la clase, que no lo ve, intentaría crearlo
+            # otra vez y chocaría con su índice único. Solo consume un número del contador.
+            env["ir.sequence"].next_by_code("payment.request")
             groups = env.ref("base.group_user") | env.ref("payment_request.group_payment_approver")
             approver = (
                 env["res.users"]
