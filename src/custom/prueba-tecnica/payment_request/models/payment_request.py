@@ -11,13 +11,6 @@ TREASURY_GROUP = "payment_request.group_payment_treasury"
 COMPANY_SEQUENCE_CODE = "payment.request.company"
 
 
-def REJECT_EMAIL_MESSAGE():
-    return _(
-        "Para rechazar la solicitud necesitas un correo en tu usuario: el solicitante recibe el motivo con él. "
-        "Configúralo en Mi perfil o pídeselo a un administrador."
-    )
-
-
 class PaymentRequest(models.Model):
     _name = "payment.request"
     _description = "Solicitud de pago"
@@ -420,6 +413,15 @@ class PaymentRequest(models.Model):
         if not self.env.user.email:
             raise UserError(message)
 
+    def _check_current_user_email_to_reject(self):
+        # Método y no función suelta: así _() encuentra el idioma del usuario en self.env.
+        self._check_current_user_email(
+            _(
+                "Para rechazar la solicitud necesitas un correo en tu usuario: el solicitante recibe el motivo con él. "
+                "Configúralo en Mi perfil o pídeselo a un administrador."
+            )
+        )
+
     def action_submit(self):
         self._check_current_user_email(
             _(
@@ -436,7 +438,7 @@ class PaymentRequest(models.Model):
         """Abre el asistente del motivo; el rechazo lo hace el asistente."""
         self.ensure_one()
         self._check_state_change("rejected", final=False)
-        self._check_current_user_email(REJECT_EMAIL_MESSAGE())
+        self._check_current_user_email_to_reject()
         return {
             "type": "ir.actions.act_window",
             "name": _("Rechazar solicitud"),
