@@ -1,5 +1,8 @@
+from psycopg2.errors import LockNotAvailable
+
 from odoo import _, api, fields, models
 from odoo.exceptions import AccessError, UserError, ValidationError
+from odoo.tools import SQL
 
 APPROVER_GROUP = "payment_request.group_payment_approver"
 TREASURY_GROUP = "payment_request.group_payment_treasury"
@@ -125,6 +128,9 @@ class PaymentRequest(models.Model):
         return super().create(vals_list)
 
     def write(self, vals):
+        if "state" in vals:
+            # Antes de validar nada: si otra persona está cambiando el estado a la vez, gana una sola.
+            self._lock_for_update()
         if self._FIXED_FIELDS.intersection(vals):
             raise UserError(_("El número y el solicitante de una solicitud no se pueden cambiar."))
         if self._SYSTEM_FIELDS.intersection(vals) and not self.env.su:
@@ -149,6 +155,27 @@ class PaymentRequest(models.Model):
     def _unlink_except_not_draft(self):
         if any(request.state != "draft" for request in self):
             raise UserError(_("Solo se pueden borrar solicitudes en borrador."))
+
+    def _lock_for_update(self):
+        """Bloquea en PostgreSQL las filas de estas solicitudes hasta que termine la transacción.
+
+        Lo hace cada cambio de estado (enviar, aprobar, rechazar, pagar) antes de validar nada. Si otra
+        persona tiene la solicitud bloqueada porque está actuando sobre ella en este momento, NOWAIT
+        hace que se avise de inmediato en lugar de esperar. Después se vuelve a leer la solicitud de la
+        base, para validar sobre su estado real y no sobre lo que se leyó antes del bloqueo.
+        """
+        if not self.ids:
+            return
+        try:
+            with self.env.cr.savepoint(flush=False):
+                self.env.cr.execute(
+                    SQL("SELECT id FROM payment_request WHERE id IN %s FOR UPDATE NOWAIT", tuple(self.ids))
+                )
+        except LockNotAvailable:
+            raise UserError(
+                _("Otra persona está procesando esta solicitud en este momento. Recarga la página e intenta de nuevo.")
+            ) from None
+        self.invalidate_recordset()
 
     def _check_state_change(self, new_state, final=True):
         """Valida un cambio de estado, venga de un botón, de una llamada al método o de un write directo.
@@ -244,6 +271,7 @@ class PaymentRequest(models.Model):
     def _reject(self, reason):
         """Rechaza la solicitud con el motivo, que queda en el campo y en el chatter."""
         self.ensure_one()
+        self._lock_for_update()
         # El motivo se escribe antes porque el cambio de estado exige que exista.
         self._check_state_change("rejected", final=False)
         # sudo() solo para escribir el motivo: es un campo del sistema, ningún usuario lo escribe.
@@ -294,9 +322,11 @@ class PaymentRequest(models.Model):
         """Registra el pago al proveedor en contabilidad y marca la solicitud como pagada.
 
         El pago sale en la moneda del diario, convertido con la tasa del día del pago si hace falta.
-        Todo ocurre en la misma transacción: si el pago falla, la solicitud sigue aprobada.
+        Todo ocurre en la misma transacción: si el pago falla, la solicitud sigue aprobada. El bloqueo
+        va antes de crear el pago: un doble clic o dos personas a la vez no crean dos pagos.
         """
         self.ensure_one()
+        self._lock_for_update()
         self._check_state_change("paid", final=False)
         if self.payment_id:
             raise UserError(_("La solicitud %s ya tiene un pago registrado.", self.name))
