@@ -1,3 +1,4 @@
+import hashlib
 import json
 import logging
 import math
@@ -5,6 +6,8 @@ import re
 import time
 from datetime import datetime
 from urllib.parse import urlencode
+
+from psycopg2.errors import UniqueViolation
 
 from odoo import Command, http
 from odoo.exceptions import AccessError
@@ -26,6 +29,8 @@ RIF_RE = re.compile(r"[VEJPGC][0-9]{9}")
 RIF_SEPARATORS_RE = re.compile(r"[-. ]")
 ORDER_FIELDS = ("customer_rif", "external_ref", "lines")
 LINE_FIELDS = ("default_code", "quantity")
+# Idempotency-Key: de 1 a 255 caracteres ASCII visibles (espacio incluido, sin tabuladores).
+IDEMPOTENCY_KEY_RE = re.compile(r"[\x20-\x7e]{1,255}")
 DATE_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}(T[0-9]{2}:[0-9]{2}:[0-9]{2}Z?)?")
 
 
@@ -218,7 +223,14 @@ class ShopIntegrationController(http.Controller):
         env = request.env
         if not env["sale.order"].has_access("create"):
             raise ApiError(403, "FORBIDDEN", env._("Este usuario no tiene permiso para crear pedidos."))
-        rif, external_ref, lines = self._parse_order(self._json_body())
+        idempotency_key = self._idempotency_key()
+        body = self._json_body()
+        rif, external_ref, lines = self._parse_order(body)
+        key_record = None
+        if idempotency_key:
+            existing_order, key_record = self._reserve_idempotency_key(idempotency_key, body)
+            if existing_order:
+                return self._order_response(existing_order, replayed=True)
         partner = self._find_customer(rif)
         products = self._find_products([code for code, _qty in lines])
         order_lines = []
@@ -247,9 +259,70 @@ class ShopIntegrationController(http.Controller):
                 "order_line": order_lines,
             }
         )
+        if key_record:
+            key_record.order_id = order
         return self._order_response(order)
 
-    def _order_response(self, order):
+    def _idempotency_key(self):
+        """Valor de la cabecera Idempotency-Key, o None si no viene (es opcional)."""
+        value = request.httprequest.headers.get("Idempotency-Key")
+        if value is None:
+            return None
+        value = value.strip()
+        if not IDEMPOTENCY_KEY_RE.fullmatch(value):
+            raise ApiError(
+                400,
+                "INVALID_IDEMPOTENCY_KEY",
+                request.env._("Idempotency-Key debe tener de 1 a 255 caracteres ASCII visibles."),
+                "Idempotency-Key",
+            )
+        return value
+
+    def _reserve_idempotency_key(self, key, body):
+        """Busca o reserva la clave de este usuario.
+
+        :return: (pedido ya creado con esta clave y el mismo contenido, o None;
+            registro de la clave reservada para el pedido nuevo, o None)
+        :raises ApiError: 409 si la clave ya se usó con otro contenido o la usa otra petición en curso
+        """
+        env = request.env
+        # Mismo contenido aunque cambien el orden de los campos o los espacios.
+        canonical = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        request_hash = hashlib.sha256(canonical.encode()).hexdigest()
+        # sudo() solo para las claves de este usuario: quien llama a la API no lee ni escribe
+        # ese modelo, igual que el log.
+        Keys = env["shop.idempotency.key"].sudo()
+        existing = Keys.search([("user_id", "=", env.uid), ("key", "=", key)], limit=1)
+        if existing and existing.request_hash != request_hash:
+            raise ApiError(
+                409,
+                "IDEMPOTENCY_KEY_REUSED",
+                env._("Esta Idempotency-Key ya se usó con otro contenido. Use una clave nueva para otro pedido."),
+                "Idempotency-Key",
+            )
+        in_use = ApiError(
+            409,
+            "IDEMPOTENCY_KEY_IN_USE",
+            env._("Hay otra petición con esta Idempotency-Key que todavía no terminó. Reintente en unos segundos."),
+            "Idempotency-Key",
+        )
+        if existing:
+            if not existing.order_id:
+                raise in_use
+            return existing.order_id, None
+        try:
+            # Dos peticiones a la vez con la misma clave: la restricción única de la base deja pasar una.
+            with env.cr.savepoint():
+                record = Keys.create({"user_id": env.uid, "key": key, "request_hash": request_hash})
+        except UniqueViolation:
+            raise in_use from None
+        return None, record
+
+    def _order_response(self, order, replayed=False):
+        # sudo() al repetir una respuesta: el pedido lo creó este usuario, pero quien revisa la
+        # cotización puede haberle cambiado el vendedor, y la respuesta debe ser la misma.
+        order = order.sudo() if replayed else order
+        headers = [("Idempotent-Replayed", "true")] if replayed else None
         return request.make_json_response(
             {
                 "id": order.id,
@@ -261,6 +334,7 @@ class ShopIntegrationController(http.Controller):
                 "amount_total": order.amount_total,
                 "currency": order.currency_id.name,
             },
+            headers=headers,
             status=201,
         )
 
