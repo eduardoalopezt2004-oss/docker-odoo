@@ -4,6 +4,7 @@ from unittest.mock import patch
 from odoo import SUPERUSER_ID, Command, api, sql_db
 from odoo.exceptions import UserError
 from odoo.tests import tagged
+from odoo.tests.common import get_db_name
 
 from odoo.addons.payment_request.models.payment_request import PaymentRequest
 
@@ -22,6 +23,46 @@ class TestPaymentConcurrency(PaymentRequestCommon):
     El bloqueo lo hace PostgreSQL (SELECT ... FOR UPDATE NOWAIT). Para probarlo de verdad hacen
     falta dos conexiones independientes y datos confirmados, que se borran al terminar.
     """
+
+    @classmethod
+    def setUpClass(cls):
+        # El aprobador de la prueba de punta a punta se confirma antes de que la clase abra su transacción.
+        # Crear un usuario escribe en registros compartidos (por ejemplo, el resumen por correo de
+        # digest): si esa transacción ya los tuviera bloqueados, la conexión aparte esperaría a la prueba,
+        # que a su vez la espera a ella. Se borra al final, cuando esa transacción ya se cerró.
+        cls.committed_approver_id = cls._create_committed_approver()
+        cls.addClassCleanup(cls._delete_committed_user, cls.committed_approver_id)
+        super().setUpClass()
+
+    @classmethod
+    def _create_committed_approver(cls):
+        with sql_db.db_connect(get_db_name()).cursor() as cr:
+            cr.execute(SET_LOCK_TIMEOUT)
+            env = api.Environment(cr, SUPERUSER_ID, QUIET)
+            groups = env.ref("base.group_user") | env.ref("payment_request.group_payment_approver")
+            approver = (
+                env["res.users"]
+                .with_context(no_reset_password=True)
+                .create(
+                    {
+                        "name": "Aprobador de la prueba de concurrencia",
+                        "login": "aprobador_concurrencia_c",
+                        "email": "aprobador_concurrencia_c@example.com",
+                        "groups_id": [Command.set(groups.ids)],
+                    }
+                )
+            )
+            return approver.id
+
+    @classmethod
+    def _delete_committed_user(cls, user_id):
+        with sql_db.db_connect(get_db_name()).cursor() as cr:
+            cr.execute(SET_LOCK_TIMEOUT)
+            env = api.Environment(cr, SUPERUSER_ID, {})
+            user = env["res.users"].browse(user_id)
+            partner = user.partner_id
+            user.unlink()
+            partner.unlink()
 
     def _committed_request(self):
         db = sql_db.db_connect(self.env.cr.dbname)
@@ -43,52 +84,19 @@ class TestPaymentConcurrency(PaymentRequestCommon):
             cr.execute("DELETE FROM res_partner WHERE id = %s", [partner_id])
 
     def _committed_submitted_request(self):
-        """Solicitud enviada con su aprobador, confirmada en la base para que la vean otras conexiones.
+        """Solicitud enviada, asignada al aprobador confirmado, para que la vean otras conexiones.
 
         Pasa a enviada por SQL: el envío normal necesita un nivel de aprobación confirmado, que cambiaría
         el resultado de las demás pruebas mientras exista.
-
-        :return: (id de la solicitud, id del aprobador)
         """
-        with sql_db.db_connect(self.env.cr.dbname).cursor() as cr:
+        request_id = self._committed_request()
+        with sql_db.db_connect(get_db_name()).cursor() as cr:
             cr.execute(SET_LOCK_TIMEOUT)
-            env = api.Environment(cr, SUPERUSER_ID, QUIET)
-            groups = env.ref("base.group_user") | env.ref("payment_request.group_payment_approver")
-            approver = (
-                env["res.users"]
-                .with_context(no_reset_password=True)
-                .create(
-                    {
-                        "name": "Aprobador de la prueba de concurrencia",
-                        "login": "aprobador_concurrencia_c",
-                        "email": "aprobador_concurrencia_c@example.com",
-                        "groups_id": [Command.set(groups.ids)],
-                    }
-                )
-            )
-            partner = env["res.partner"].create({"name": "Proveedor de la prueba de concurrencia"})
-            request = env["payment.request"].create(
-                {"partner_id": partner.id, "amount": 10.0, "concept": "Prueba de concurrencia"}
-            )
-            env.flush_all()
             cr.execute(
                 "UPDATE payment_request SET state = 'submitted', approver_id = %s WHERE id = %s",
-                [approver.id, request.id],
+                [self.committed_approver_id, request_id],
             )
-            ids = request.id, partner.id, approver.id
-        # Se ejecutan en orden inverso: primero la solicitud (que apunta al aprobador), después el usuario.
-        self.addCleanup(self._delete_committed_user, ids[2])
-        self.addCleanup(self._delete_committed, ids[0], ids[1])
-        return ids[0], ids[2]
-
-    def _delete_committed_user(self, user_id):
-        with sql_db.db_connect(self.env.cr.dbname).cursor() as cr:
-            cr.execute(SET_LOCK_TIMEOUT)
-            env = api.Environment(cr, SUPERUSER_ID, {})
-            user = env["res.users"].browse(user_id)
-            partner = user.partner_id
-            user.unlink()
-            partner.unlink()
+        return request_id
 
     def test_second_person_gets_an_immediate_notice(self):
         request_id = self._committed_request()
@@ -114,7 +122,8 @@ class TestPaymentConcurrency(PaymentRequestCommon):
         la misma persona en dos pestañas o dispositivos. Cada una es una conexión propia a la base, y aquí
         se usan los métodos reales, no solo el bloqueo.
         """
-        request_id, approver_id = self._committed_submitted_request()
+        request_id = self._committed_submitted_request()
+        approver_id = self.committed_approver_id
         db = sql_db.db_connect(self.env.cr.dbname)
         with db.cursor() as first, db.cursor() as second:
             second.execute(SET_LOCK_TIMEOUT)
