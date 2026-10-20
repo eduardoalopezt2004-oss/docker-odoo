@@ -128,9 +128,11 @@ class PaymentRequest(models.Model):
                 raise UserError(_("El aprobador, el motivo de rechazo y el pago los registra el sistema."))
             if vals.get("state", "draft") != "draft":
                 raise UserError(_("Una solicitud de pago siempre se crea en borrador."))
-            # El número lo pone siempre la secuencia, aunque venga otro en los valores.
-            company = self.env["res.company"].browse(vals["company_id"]) if vals.get("company_id") else self.env.company
-            vals["name"] = self._next_request_number(company)
+            # El número lo pone siempre la secuencia, aunque venga otro en los valores. La compañía se fija
+            # aquí, con los valores por defecto del contexto, para que el número lleve el código de la
+            # compañía con que realmente se guarda.
+            vals.setdefault("company_id", self.default_get(["company_id"]).get("company_id"))
+            vals["name"] = self._next_request_number(self.env["res.company"].browse(vals["company_id"]))
         return super().create(vals_list)
 
     @api.model
