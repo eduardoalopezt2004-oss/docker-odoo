@@ -1,5 +1,6 @@
 from odoo import api, fields, models
 from odoo.exceptions import UserError
+from odoo.tools.misc import format_date
 
 
 class PaymentRequestPayWizard(models.TransientModel):
@@ -51,7 +52,7 @@ class PaymentRequestPayWizard(models.TransientModel):
             if currency != wizard.request_id.currency_id:
                 wizard.rate_text = "%s (tasa del %s)" % (
                     wizard.request_id._format_rate(wizard.request_id.currency_id, currency, rate),
-                    wizard.payment_date.strftime("%d/%m/%Y"),
+                    format_date(self.env, wizard.payment_date),
                 )
 
     def action_confirm(self):

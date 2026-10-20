@@ -3,6 +3,7 @@ from psycopg2.errors import LockNotAvailable
 from odoo import _, api, fields, models
 from odoo.exceptions import AccessError, UserError, ValidationError
 from odoo.tools import SQL
+from odoo.tools.misc import format_date
 
 APPROVER_GROUP = "payment_request.group_payment_approver"
 TREASURY_GROUP = "payment_request.group_payment_treasury"
@@ -384,7 +385,7 @@ class PaymentRequest(models.Model):
                     "contabilidad que la cargue en Facturación → Configuración → Contabilidad → Monedas: el pago "
                     "usa la tasa de ese día, no una anterior.",
                     currency=currency.name,
-                    date=payment_date.strftime("%d/%m/%Y"),
+                    date=format_date(self.env, payment_date),
                     company=main_company.name,
                 )
             )
