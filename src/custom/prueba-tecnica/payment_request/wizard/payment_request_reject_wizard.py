@@ -1,4 +1,3 @@
-from odoo.addons.payment_request.models.payment_request import REJECT_EMAIL_MESSAGE
 from odoo import _, fields, models
 from odoo.exceptions import ValidationError
 
@@ -12,7 +11,7 @@ class PaymentRequestRejectWizard(models.TransientModel):
 
     def action_confirm(self):
         self.ensure_one()
-        self.request_id._check_current_user_email(REJECT_EMAIL_MESSAGE())
+        self.request_id._check_current_user_email_to_reject()
         reason = (self.reason or "").strip()
         if not reason:
             raise ValidationError(_("Indica el motivo del rechazo: el solicitante necesita saber por qué."))

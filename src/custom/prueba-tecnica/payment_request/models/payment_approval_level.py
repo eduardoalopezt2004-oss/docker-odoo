@@ -40,10 +40,19 @@ class PaymentApprovalLevel(models.Model):
             if level.currency_id.compare_amounts(level.min_amount, 0.0) < 0:
                 raise ValidationError(_("El monto mínimo de un nivel no puede ser negativo."))
 
-    @api.constrains("approver_id")
+    @api.constrains("approver_id", "company_id")
     def _check_approver_group(self):
         for level in self:
             if not level.approver_id.has_group(APPROVER_GROUP):
                 raise ValidationError(
                     _("%s no tiene el grupo Aprobador de solicitudes de pago.", level.approver_id.display_name)
+                )
+            # Sin acceso a la compañía, el aprobador no podría ver las solicitudes que le tocan.
+            if level.company_id not in level.approver_id.company_ids:
+                raise ValidationError(
+                    _(
+                        "%(approver)s no tiene acceso a la compañía %(company)s.",
+                        approver=level.approver_id.display_name,
+                        company=level.company_id.display_name,
+                    )
                 )

@@ -6,7 +6,7 @@ Ejercicio 4 de la prueba técnica. Hoy las solicitudes de pago a proveedores lle
 
 - [x] A: modelo, flujo de estados, grupos, vistas y menú.
 - [x] B: niveles de aprobación por monto, aprobador asignado, rechazo con motivo, pago con `account.payment` y reporte PDF.
-- [ ] C: no iniciado.
+- [x] C: pago en otra moneda con la tasa del día del pago, multi-compañía con reglas de registro y numeración por compañía, bloqueo de concurrencia en la base y `ARCHITECTURE.md`.
 
 ## Qué hace (tramo A)
 
@@ -48,6 +48,34 @@ Ejercicio 4 de la prueba técnica. Hoy las solicitudes de pago a proveedores lle
 - El número y la fecha del pago se leen con campos relacionados, que Odoo calcula como superusuario. Así el formulario y el PDF los muestran a quien no tiene permisos de Contabilidad, sin darle acceso al pago.
 - Los niveles los lee cualquier solicitante (el envío los consulta) y solo los cambia el administrador del sistema.
 
+## Qué hace (tramo C)
+
+Las decisiones, con lo que se descartó y por qué, están en [`ARCHITECTURE.md`](ARCHITECTURE.md).
+
+- **Pago en otra moneda.** El pago sale en la moneda del diario que elige Tesorería. Una solicitud en dólares pagada desde un banco en bolívares se convierte con la tasa del día del pago. Antes de confirmar, el asistente muestra el monto en bolívares y la tasa, por ejemplo «1 USD = 40 VES (tasa del 20/10/2026)», con la fecha en el formato del idioma del usuario. La solicitud y el PDF guardan el monto pagado, su moneda y la tasa usada.
+- **Sin tasa del día, no se paga.** Si no hay tasa cargada para la fecha del pago, el asistente lo avisa y el pago se bloquea con un mensaje que dice qué tasa cargar y dónde (Facturación → Configuración → Contabilidad → Monedas, un menú de quien administra la contabilidad). No se usa una tasa anterior, que es lo que haría Odoo por defecto. Vale también si la solicitud y el diario usan la misma moneda extranjera: el monto no cambia, pero el asiento en la moneda de la compañía se calcula con esa tasa.
+- **Multi-compañía.** Cada solicitud es de una compañía: la activa al crearla, y después no cambia, porque el número lleva el código de esa compañía. Cada compañía tiene sus niveles, y el aprobador de un nivel debe tener acceso a su compañía; si se la quitan después, el envío falla con un mensaje que pide revisar los niveles. Una sucursal paga desde sus bancos o los de su compañía principal, como en Odoo. Un usuario solo ve solicitudes y niveles de las compañías que tiene activas. Quien trabaja con varias compañías puede filtrar y agrupar por compañía.
+- **Numeración por compañía.** En la ficha de la compañía (Ajustes → Usuarios y compañías → Compañías) hay un campo «Código para solicitudes de pago». Una compañía con código, por ejemplo DA, numera con su propio contador seguido: DA/SP/2026/0001, DA/SP/2026/0002. Sin código, sigue con el contador general: SP/2026/0001. Cambiar el código solo afecta a las solicitudes nuevas. El número nunca se repite.
+- **Dos personas a la vez.** Si dos personas actúan sobre la misma solicitud al mismo tiempo (aprobar y rechazar en dos pestañas, un doble clic en «Registrar pago»), solo una lo logra. La otra recibe al instante «Otra persona está procesando esta solicitud. Recarga la página e intenta de nuevo.» y no se hace nada: no se crean dos pagos.
+- **Pago fallido.** Si el pago falla (al publicarlo o por falta de tasa), la solicitud sigue aprobada y no queda ningún pago suelto.
+
+### Cómo se aplica cada regla (tramo C)
+
+- Para cada moneda distinta de la de la compañía se revisa la tasa de `res.currency.rate` con que Odoo 18 va a convertir: la de la compañía principal o, si no hay, la que no tiene compañía, la más reciente hasta la fecha del pago. Tiene que ser de esa fecha. Odoo solo deja cargar tasas en la compañía principal, así que una sucursal usa las de su principal. Con la tasa confirmada, el monto lo convierte `res.currency._convert` y la tasa sale de `res.currency._get_conversion_rate`. Si la solicitud y el diario están en la misma moneda no hay conversión, y la tasa del día solo se exige si esa moneda no es la de la compañía.
+- La tasa usada queda en `payment_rate`, un campo del sistema como el aprobador: ningún usuario lo escribe. Se guarda sin redondeo, como las tasas de Odoo, y su texto («1 USD = 40 VES») sale de un solo método, sin notación científica.
+- Multi-compañía: reglas de registro globales `[('company_id', 'in', company_ids)]` en solicitudes y niveles. Se suman a las de los grupos, así que «Aprobador y Tesorería ven todas» pasa a ser «todas las de sus compañías activas».
+- El diario del pago tiene que poder usarse en la compañía de la solicitud, con el mismo criterio que Odoo aplica a los diarios: los de esa compañía o los de su compañía principal. El asistente solo ofrece esos.
+- El número se calcula con la compañía con que se guarda la solicitud, también cuando llega por el contexto.
+- Concurrencia: `_lock_for_update` hace `SELECT … FOR NO KEY UPDATE NOWAIT` sobre la solicitud antes de validar cualquier cambio de estado, y en el pago antes de crear el `account.payment`. Lo hace PostgreSQL, no un chequeo en Python. `NO KEY UPDATE` choca con otro cambio de estado, pero no con quien solo crea un registro que apunta a la solicitud, como el asistente de pago. El choque no queda como error en el registro de Odoo: es esperado y se convierte en el aviso.
+- El contador de una compañía con código es una secuencia de Odoo (`ir.sequence`) de esa compañía, que se crea con `sudo()` acotado la primera vez, porque quien pide el pago no puede crear secuencias.
+
+### Actualizar una base con datos (18.0.1.1.0 → 18.0.1.2.0)
+
+1. Respaldo de la base.
+2. Actualizar con el código nuevo: `./odoo update prueba-tecnica -d <base> -m payment_request`.
+3. Las solicitudes existentes quedan en la compañía principal (hasta ahora había una sola) y conservan su número. Ninguna compañía tiene código, así que la numeración sigue igual hasta que el administrador ponga uno.
+4. Revisar en **Solicitudes de pago** que se ven todas las solicitudes, y que un usuario de otra compañía, si existe, no las ve.
+
 ## Qué se reusa de Odoo
 
 - `mail.thread`: el chatter registra cada cambio de estado, proveedor, monto o moneda, con su autor y su fecha.
@@ -57,6 +85,7 @@ Ejercicio 4 de la prueba técnica. Hoy las solicitudes de pago a proveedores lle
 - `mail.activity.mixin` para la actividad del aprobador.
 - `account.payment` y `account.journal` para el pago y el diario.
 - `ir.actions.report` con QWeb para el PDF, con el diseño de documento de la compañía.
+- Tramo C: las tasas de `res.currency.rate` y la conversión de `res.currency`, las reglas de registro multi-compañía, `company_ids` de cada usuario, las secuencias por compañía de `ir.sequence` y el bloqueo de filas de PostgreSQL.
 
 ## Cómo se aplica cada regla
 
@@ -121,6 +150,34 @@ A mano, con un usuario por grupo y un administrador:
 4. Con el jefe de área, rechazar la primera con un motivo; con el solicitante, ver el motivo en el chatter.
 5. Aprobar la de Gerencia con su aprobador, y con Tesorería pagarla eligiendo un diario; abrir el pago desde el botón «Pago» e imprimir la solicitud.
 
+### Pruebas del tramo C
+
+En `tests/` (la preparación común está en `tests/common.py`):
+
+| Criterio | Prueba |
+|---|---|
+| USD pagada desde un diario en VES con la tasa del día del pago | `test_usd_request_paid_from_ves_journal_at_payment_date_rate`, `test_rate_is_the_one_of_the_payment_date` |
+| Sin tasa del día no se paga, aunque haya una anterior | `test_missing_rate_on_payment_date_blocks_payment` |
+| Se revisa la misma tasa con que convierte Odoo, también en una sucursal | `test_rate_check_looks_at_the_rate_odoo_converts_with`, `test_branch_pays_with_the_rates_of_its_main_company` |
+| Una sucursal paga desde los diarios de su principal, nunca desde los de otra compañía | `test_branch_can_pay_from_the_journals_of_its_main_company` |
+| El asistente muestra monto y tasa antes de confirmar, con la fecha en el formato del idioma | `test_wizard_shows_amount_and_rate_before_paying` |
+| Tasa chica guardada sin redondeo y sin notación científica | `test_small_rate_is_stored_with_full_precision` |
+| Misma moneda de la compañía: sin conversión ni tasa | `test_same_currency_needs_no_rate` |
+| Misma moneda extranjera: sin conversión, con la tasa del día | `test_same_foreign_currency_needs_the_rate_of_the_day` |
+| Pago fallido: la solicitud sigue aprobada | `test_failed_payment_in_ves_leaves_request_approved` (y `test_pay_is_all_or_nothing` del tramo B) |
+| PDF con monto pagado y tasa | `test_report_shows_amount_paid_and_rate` |
+| Un usuario de la compañía B no ve nada de la A | `test_user_of_company_b_sees_nothing_of_company_a`, `test_user_with_both_companies_sees_only_the_active_ones` |
+| Niveles por compañía; aprobador que perdió acceso a la compañía | `test_level_of_the_request_company_is_used`, `test_level_approver_must_have_access_to_its_company`, `test_submit_fails_if_the_approver_lost_access_to_the_company` |
+| La compañía no cambia desde que se crea y el número lleva su código; filtro por compañía | `test_company_is_fixed_from_creation`, `test_number_follows_the_company_the_request_is_created_in`, `test_company_cannot_change_after_submit`, `test_search_view_groups_by_company_for_multi_company_users` |
+| El aprobador en dos pestañas a la vez: gana una, con los métodos reales | `test_two_tabs_of_the_approver_only_one_wins` |
+| Concurrencia con dos conexiones reales a PostgreSQL; el aviso es inmediato y no queda como error en el registro | `test_second_person_gets_an_immediate_notice`, `test_lock_is_free_when_nobody_else_has_it` |
+| Crear un registro que apunta a la solicitud no choca con el bloqueo | `test_a_record_pointing_to_the_request_does_not_block_it` |
+| El mensaje del correo faltante al rechazar (tramo B) no deja avisos de traducción en el registro | `test_email_message_leaves_no_warning_in_the_log` |
+| Todo cambio de estado pasa por el bloqueo antes de hacer nada | `test_every_state_change_takes_the_lock_before_doing_anything` |
+| Numeración por compañía con código | `test_company_without_code_keeps_the_general_counter`, `test_each_company_with_code_has_its_own_consecutive_counter`, `test_changing_the_code_only_affects_new_requests`, `test_code_format_and_uniqueness`, `test_requester_without_admin_rights_gets_a_number`, `test_numbers_are_unique_in_the_database` |
+
+Las pruebas de concurrencia confirman datos en la base con conexiones aparte, porque un bloqueo entre dos personas no se puede probar dentro de una sola transacción. Al terminar borran esos datos. Cada conexión tiene un límite de espera de 5 segundos: si alguien quitara `NOWAIT`, la prueba fallaría en lugar de quedarse esperando.
+
 ## Cómo se verificó (tramo A)
 
 - Pruebas en una base nueva: `0 failed, 0 error(s) of 20 tests` (antes de agregar el tramo B).
@@ -135,6 +192,16 @@ A mano, con un usuario por grupo y un administrador:
 - La primera corrida dio 37 errores con una sola causa: los usuarios de las pruebas no tenían correo, y Odoo no puede notificar la actividad del aprobador sin el correo de quien envía. Se corrigió dándoles un correo de ejemplo en las pruebas.
 - Supuesto: quien envía o rechaza una solicitud tiene un correo en su usuario, porque Odoo lo usa para avisar al aprobador o al solicitante. Si falta, el módulo lo dice con un mensaje claro antes de intentarlo, en lugar del error técnico de Odoo. Lo fijan las pruebas `test_submit_without_email_has_clear_message` y `test_reject_without_email_has_clear_message`.
 - Pruebas en el navegador automatizadas por la IA, con un usuario por grupo: envío con aprobador asignado y su actividad, rechazo con motivo en el chatter, pago con diario y PDF con quién aprobó y cuándo. Después las revisé en el navegador para confirmar.
+
+## Cómo se verificó (tramo C)
+
+- Pruebas en una base nueva de Odoo 18.0, sin datos demo: `0 failed, 0 error(s) of 83 tests` (50 de los tramos A y B y 33 del C). El registro no tiene `bad query` ni avisos de traducción del módulo.
+- Antes del código, las pruebas del tramo C fallaban por lo que faltaba: `9 failed, 8 error(s) of 66 tests` (sin `company_id`, `payment_rate`, `_lock_for_update` ni la vista previa del asistente; el pago salía en dólares; el usuario de la compañía B veía la A).
+- Las pruebas que se agregaron para corregir un error fallaron primero con el código anterior, por lo que cubren: la sucursal que no podía pagar, la tasa vieja aceptada, la misma moneda extranjera sin tasa, la compañía que se podía cambiar en borrador, los hallazgos de la revisión técnica, la fecha de los avisos, el error del bloqueo en el registro y el aviso de traducción del tramo B. Las que se agregaron para reforzar (el aprobador en dos pestañas, que el aviso sea inmediato) pasaron desde el principio y se comprobaron con las roturas de abajo.
+- Se rompieron a propósito cuatro defensas en una sola corrida: sin el bloqueo en `write`, sin `NOWAIT`, aceptando cualquier tasa anterior y sin la regla de compañía en las solicitudes. Fallaron las pruebas que cubren cada una (`8 failed, 1 error(s) of 83 tests`), incluida la de `NOWAIT`, que falló a los 5 segundos en lugar de quedarse esperando. Después se restauró el código.
+- Actualización de 18.0.1.1.0 a 18.0.1.2.0 en una base con cinco solicitudes, una en cada estado: `./odoo update prueba-tecnica -d <base> -m payment_request` terminó en 11 s sin errores. Las cinco conservaron número y estado y quedaron en la compañía principal, se crearon la restricción de número único y las dos reglas por compañía, y cada usuario siguió viendo las mismas solicitudes.
+- Linter del repositorio (`.pylintrc` y `.pylintrc-mandatory`): solo marca que el autor del manifest no es la OCA, igual que en los otros módulos.
+- Lo probé en el navegador con dos compañías y un usuario por grupo: pago en bolívares de una solicitud en dólares con la tasa del día, aviso y bloqueo sin tasa, PDF con el monto pagado y la tasa, usuarios de la compañía B que no ven nada de la A, niveles según las compañías activas y el aprobador en dos pestañas.
 
 ## Supuestos (tramo A)
 
@@ -160,16 +227,27 @@ A mano, con un usuario por grupo y un administrador:
 
 - **Un solo aprobador por solicitud**, el del nivel que corresponde al monto. Los pagos grandes los aprueba solo gerencia, sin pasar antes por el jefe (preguntas 1, 2 y 8).
 - **El aprobador sale del nivel, no del jefe del empleado.** No se usa la app Empleados.
-- **El monto se compara en la moneda de la compañía** que envía, con la tasa de la fecha de la solicitud. Los niveles son por compañía; la regla de registro multi-compañía queda para el tramo C.
+- **El monto se compara en la moneda de la compañía** de la solicitud, con la tasa de la fecha de la solicitud. Los niveles son por compañía (desde el tramo C, también con reglas de registro).
 - **Sin nivel que cubra el monto, no se envía.** Es mejor un error claro que una solicitud enviada que nadie aprueba, que es justo el problema que Carolina describe. Para que casi no pase, conviene un nivel con monto mínimo 0.
 - **Si el aprobador del nivel es quien pidió el pago, no se envía** y no se reasigna a otra persona en silencio. El mensaje pide a un administrador revisar los niveles.
 - **Solo el aprobador asignado rechaza o aprueba**, aunque haya otros aprobadores.
 - **El rechazo lleva motivo obligatorio** y sigue siendo un estado final.
-- **El pago es suelto al proveedor, por el monto total y en la moneda de la solicitud**, sin cruzarlo con una factura ni pagos parciales (pregunta 7). Se publica al crearlo.
+- **El pago es suelto al proveedor, por el monto total**, sin cruzarlo con una factura ni pagos parciales (pregunta 7). Se publica al crearlo. Desde el tramo C sale en la moneda del diario, convertido con la tasa del día del pago.
 - **El diario lo elige Tesorería** entre los diarios de banco y caja de la compañía. El módulo no asume uno.
 - **Tesorería no necesita permisos de Contabilidad:** el pago se crea y se publica con `sudo()` acotado a ese pago.
 - **El reporte no lleva firmas**: muestra quién aprobó y cuándo (pregunta 3).
 - **El módulo ahora depende de `account`** (para el pago y el diario).
+
+## Supuestos (tramo C)
+
+- **La contabilidad se lleva en Odoo**, con diarios de banco por moneda (por ejemplo, uno en bolívares y otro en dólares). El pago que crea el módulo es el registro contable. Si la contabilidad se llevara en otro sistema, ese pago lo duplicaría (pregunta 11). Este supuesto ya estaba en el tramo B, al crear un `account.payment`, pero no estaba escrito.
+- **La tasa del día se registra en Odoo** (Facturación → Configuración → Contabilidad → Monedas), de la fuente que use el cliente, a mano o con alguna actualización automática. El módulo no obtiene tasas de ninguna fuente externa y no asume cuál es (pregunta 4).
+- **El pago usa la tasa exacta del día del pago.** Si falta, el pago se bloquea con un aviso en lugar de usar una tasa anterior.
+- **La moneda del pago es la del diario.** Si Tesorería paga en dólares desde un banco en dólares, no hay conversión; si la compañía lleva la contabilidad en bolívares, igual se exige la tasa del día para el asiento.
+- **Las solicitudes y los niveles son por compañía**, aunque el correo no dice que el cliente tenga más de una (pregunta 12). Con una sola compañía, nada cambia para el usuario.
+- **Numeración:** con código, cada compañía tiene su contador (DA/SP/2026/0001); sin código, sigue el contador general (SP/2026/0001). Una solicitud de pago es un documento interno, no fiscal: no se asume ninguna exigencia legal de numeración (pregunta 12).
+- **Si dos personas actúan a la vez**, la segunda recibe un aviso inmediato, sin esperar a que termine la primera, y vuelve a intentar.
+- **El PDF muestra lo que se pagó**: el monto en la moneda del pago y la tasa usada (pregunta 3).
 
 ## Supuestos y preguntas al cliente
 
@@ -177,20 +255,24 @@ A mano, con un usuario por grupo y un administrador:
 |---|---|---|
 | 1. ¿Qué rangos califican como pago normal y como pago grande? ¿En qué moneda se mide el monto? ¿Es un solo límite o hay varios niveles? | Niveles configurables por monto mínimo, cada uno con su aprobador. El monto se compara en la moneda de la compañía. | B (y C por la conversión de moneda) |
 | 2. ¿Cómo se sabe quién es el jefe de cada empleado? ¿Usan la app Empleados de Odoo con el jefe asignado? | No se usa la app Empleados. El aprobador sale del nivel que corresponde al monto, no del jefe del empleado. | B |
-| 3. ¿Qué debe mostrar el documento de la solicitud para la carpeta del proveedor? ¿Lleva firmas? | Número, fecha, proveedor, concepto, monto y moneda, solicitante, quién aprobó y cuándo. Sin firmas: la aprobación queda registrada en Odoo. | B |
-| 4. ¿Qué tasa usan para pasar de dólares a bolívares (por ejemplo, la del BCV)? ¿La cargan ustedes a mano cada día o la debe tomar el sistema? | La tasa se carga en Odoo, en las tasas de la moneda, y el sistema usa la de la fecha del pago. No se conecta con el BCV. | C |
+| 3. ¿Qué debe mostrar el documento de la solicitud para la carpeta del proveedor? ¿Lleva firmas? | Número, fecha, proveedor, concepto, monto y moneda, solicitante, quién aprobó y cuándo. Sin firmas: la aprobación queda registrada en Odoo. Desde el tramo C, también el monto pagado en la moneda del pago y la tasa usada. | B y C |
+| 4. ¿Qué tasa usan para pasar de dólares a bolívares y de qué fuente sale? ¿Ya la registran en Odoo cada día? Si es así, ¿quién la carga? Si no, ¿quién se encargaría? ¿Les serviría que Odoo la tome sola de esa fuente? | La tasa se registra en Odoo por fecha y el pago usa la del día exacto del pago; si falta, no se paga. El módulo no consulta ninguna fuente. Tomarla automáticamente queda como propuesta en `ARCHITECTURE.md`, a decidir según la fuente. | C |
 | 5. Si el empleado se equivoca después de enviar, ¿puede anularla o alguien se la devuelve a borrador? | Nadie la anula ni la devuelve a borrador. Si hay un error, el aprobador la rechaza. | A |
 | 6. Si se rechaza, ¿la puede corregir y reenviar, o crea una nueva? | Rechazada es un estado final. El empleado crea una solicitud nueva. | A |
 | 7. El pago que registra tesorería, ¿se cruza con la factura del proveedor o es un pago suelto? ¿Puede haber pagos parciales? | Pago suelto al proveedor por el monto total, sin cruzarlo con la factura. Sin pagos parciales. | B |
 | 8. Los pagos grandes, ¿los aprueba solo gerencia o primero el jefe y después gerencia? | Un solo aprobador por solicitud: el del nivel que corresponde al monto. Los pagos grandes los aprueba solo gerencia. | B |
 | 9. ¿Todos los empleados que van a pedir pagos tienen usuario en Odoo, con su correo configurado? | Sí. Todo usuario interno queda como Solicitante, y quien envía o rechaza necesita un correo para que el aviso llegue a la otra persona. | A |
 | 10. Si ningún nivel cubre el monto de una solicitud, ¿qué debe pasar? Por ejemplo, si el pago más pequeño que cubre su política empieza por encima de cero. | No se puede enviar: sale un error que pide configurar los niveles. Se recomienda un nivel desde 0. | B |
+| 11. ¿Llevan hoy la contabilidad en Odoo? Si es así, ¿qué diarios de banco tienen y en qué moneda (bolívares, dólares)? | Sí, en Odoo, con diarios de banco por moneda. El pago que registra Tesorería es el registro contable. | B y C |
+| 12. ¿Manejan, o piensan manejar, más de una empresa en el mismo Odoo? Si es así, ¿cada empresa necesita su propia numeración de solicitudes? | El módulo separa solicitudes y niveles por compañía. Cada compañía puede tener su propio contador con un código (DA/SP/2026/0001); sin código, comparten el contador general. | C |
 
 ## Limitaciones conocidas
 
-- Lo que el correo pide y todavía no está: pago en bolívares de una solicitud en dólares con la tasa de la fecha del pago, multi-compañía con reglas de registro, y que dos aprobadores actuando a la vez no se pisen (tramo C).
 - El aprobador de un nivel puede dejar de serlo (por ejemplo, se va de la empresa): las solicitudes ya asignadas a él quedan esperándolo. No hay reasignación; hoy habría que rechazar y volver a crear la solicitud.
-- El pago se crea siempre en la moneda de la solicitud; si el diario no admite esa moneda, Odoo lo avisa al publicar y la solicitud sigue aprobada.
+- Tramo C: si la primera persona falla (por ejemplo, porque faltaba la tasa), la segunda, que recibió el aviso de «otra persona está procesando», tiene que volver a intentar a mano.
+- Tramo C: el contador propio de una compañía se crea con su primera solicitud. Si dos personas de esa compañía crean su primera solicitud en el mismo instante, podrían crearse dos contadores; el número único en la base impide que se repita un número, y una de las dos personas recibiría un error y volvería a intentar.
+- Tramo C: un código que otra compañía ya usó (por ejemplo, la compañía X tuvo DA y lo cambió, o está archivada, y la compañía Y toma DA) arranca un contador nuevo en 0001 y chocaría con números que ya existen. El número único en la base impide la repetición, pero esa solicitud no se puede crear. Conviene no reusar un código.
+- Tramo C: al actualizar desde 18.0.1.1.0, las solicitudes existentes quedan en la compañía principal. Si el cliente ya usaba varias compañías, habría que revisar a cuál corresponde cada una, y como la compañía ya no se cambia desde la pantalla, corregirla pide un script de datos.
 - El reporte no permite imprimir borradores ni enviadas: el botón solo aparece en solicitudes aprobadas o pagadas.
 - Tesorería registra el pago pero, sin permisos de Contabilidad, no puede abrirlo: ve su número y su fecha en la solicitud. Para abrirlo hace falta Facturación o Contabilidad de solo lectura.
 - Un aprobador ve los borradores de otros, pero no puede editarlos ni enviarlos.

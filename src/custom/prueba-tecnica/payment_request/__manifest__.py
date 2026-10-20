@@ -1,7 +1,7 @@
 {
     "name": "Solicitudes de pago",
     "summary": "Solicitudes de pago a proveedores con niveles de aprobación, pago y reporte",
-    "version": "18.0.1.1.0",
+    "version": "18.0.1.2.0",
     "category": "Accounting",
     "author": "Binaural",
     "license": "LGPL-3",
@@ -13,6 +13,7 @@
         "report/payment_request_report.xml",
         "views/payment_request_views.xml",
         "views/payment_approval_level_views.xml",
+        "views/res_company_views.xml",
         "views/payment_request_menus.xml",
     ],
     "installable": True,

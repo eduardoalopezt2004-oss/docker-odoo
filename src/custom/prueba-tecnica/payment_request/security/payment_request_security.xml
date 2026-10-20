@@ -58,4 +58,18 @@
         <field name="perm_create" eval="False"/>
         <field name="perm_unlink" eval="False"/>
     </record>
+
+    <!-- Multi-compañía: reglas globales (sin grupo), así que se suman a las anteriores. Cada usuario
+         ve solo las solicitudes y los niveles de las compañías que tiene activas. -->
+    <record id="payment_request_rule_company" model="ir.rule">
+        <field name="name">Solicitudes de pago: solo de las compañías activas</field>
+        <field name="model_id" ref="model_payment_request"/>
+        <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+    </record>
+
+    <record id="payment_approval_level_rule_company" model="ir.rule">
+        <field name="name">Niveles de aprobación: solo de las compañías activas</field>
+        <field name="model_id" ref="model_payment_approval_level"/>
+        <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+    </record>
 </odoo>

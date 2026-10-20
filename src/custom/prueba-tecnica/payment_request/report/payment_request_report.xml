@@ -51,6 +51,13 @@
                             Pago registrado: <span t-field="doc.payment_name"/>
                             (<span t-field="doc.payment_date"/>).
                         </p>
+                        <p t-if="doc.payment_name">
+                            Monto pagado:
+                            <span t-field="doc.payment_amount" t-options="{'widget': 'monetary', 'display_currency': doc.payment_currency_id}"/>
+                            <t t-if="doc.payment_rate_text">
+                                · Tasa: <span t-out="doc.payment_rate_text"/>
+                            </t>
+                        </p>
                     </div>
                 </t>
             </t>

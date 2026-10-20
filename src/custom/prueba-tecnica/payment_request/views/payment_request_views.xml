@@ -10,6 +10,7 @@
                 <field name="partner_id"/>
                 <field name="requester_id" widget="many2one_avatar_user"/>
                 <field name="approver_id" widget="many2one_avatar_user" optional="show"/>
+                <field name="company_id" groups="base.group_multi_company" optional="show"/>
                 <field name="concept"/>
                 <field name="amount"/>
                 <field name="currency_id" column_invisible="1"/>
@@ -69,10 +70,18 @@
                             <field name="amount" readonly="state != 'draft'"/>
                             <field name="currency_id" readonly="state != 'draft'" options="{'no_create': True}"/>
                             <field name="date" readonly="state != 'draft'"/>
+                            <!-- Solo se elige al crear: el número lleva el código de la compañía. -->
+                            <field name="company_id" groups="base.group_multi_company" readonly="id"
+                                   options="{'no_create': True}"/>
                             <field name="approval_date" invisible="not approval_date"/>
                             <field name="payment_id" invisible="1"/>
+                            <!-- La compañía siempre en la vista: la usa el dominio del proveedor (check_company). -->
+                            <field name="company_id" invisible="1"/>
                             <field name="payment_name" invisible="not payment_id"/>
                             <field name="payment_date" invisible="not payment_id"/>
+                            <field name="payment_currency_id" invisible="1"/>
+                            <field name="payment_amount" invisible="not payment_id"/>
+                            <field name="payment_rate_text" invisible="not payment_rate_text"/>
                         </group>
                     </group>
                     <group invisible="state != 'rejected'">
@@ -93,6 +102,7 @@
                 <field name="partner_id"/>
                 <field name="requester_id"/>
                 <field name="concept"/>
+                <field name="company_id" groups="base.group_multi_company"/>
                 <filter name="my_requests" string="Mis solicitudes" domain="[('requester_id', '=', uid)]"/>
                 <filter name="to_approve" string="Por aprobar por mí"
                         domain="[('approver_id', '=', uid), ('state', '=', 'submitted')]"/>
@@ -107,6 +117,8 @@
                     <filter name="group_state" string="Estado" context="{'group_by': 'state'}"/>
                     <filter name="group_requester" string="Solicitante" context="{'group_by': 'requester_id'}"/>
                     <filter name="group_approver" string="Aprobador" context="{'group_by': 'approver_id'}"/>
+                    <filter name="group_company" string="Compañía" context="{'group_by': 'company_id'}"
+                            groups="base.group_multi_company"/>
                 </group>
             </search>
         </field>
