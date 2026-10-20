@@ -78,3 +78,45 @@ Resúmenes, no citas textuales:
 
 - Corrí las pruebas en una base nueva de Odoo 18: 57 pruebas del módulo, sin fallos ni errores. Eso confirmó el uso de `res.users.apikeys`, `request.update_env`, `Model.has_access` y el parámetro `readonly` de las rutas.
 - Quedaron pendientes por tiempo los ejemplos de `curl` contra Odoo en marcha y la prueba en el navegador con una clave real.
+
+---
+
+# Tramo C — paginación, Idempotency-Key, aviso de entrega y openapi.yaml
+
+## Prompts clave (tramo C)
+
+Resúmenes, no citas textuales:
+
+1. Proponer el tramo C con cada decisión abierta explicada con contexto y ejemplos, y una recomendación para cada una.
+   - La IA planteó cinco decisiones: paginar siempre o solo cuando se pide; si `Idempotency-Key` es opcional u obligatoria y qué responder cuando se repite; qué entregas avisan a la tienda; con qué calendario se reintenta el aviso, y dónde se configura y cómo se firma.
+2. "Recomendadas": aprobé las cinco recomendaciones.
+3. Misma metodología que en los tramos anteriores: primero las pruebas, el código en commits separados por parte (paginación, idempotencia, aviso) y la documentación al final.
+
+## Qué decidí yo (tramo C)
+
+- **Paginar siempre**, 100 por defecto y 500 como máximo, con `next` que conserva los filtros, aunque cambie el contrato del tramo A. Queda documentado como cambio de contrato.
+- **`Idempotency-Key` opcional**: sin ella el POST sigue como en el tramo B. Al repetir, `201` con el mismo pedido y `Idempotent-Replayed: true`; con otro contenido, 409; un 422 no gasta la clave; claves por usuario y sin vencimiento.
+- **Avisar en cada entrega validada** de los pedidos creados por la API, también las parciales.
+- **Reintentar cualquier respuesta que no sea 2xx** a los 1, 5, 15 y 60 minutos y luego cada 6 horas hasta cerca de un día; después, «Fallido» con un botón «Reintentar». El envío siempre en segundo plano, nunca durante la validación.
+- **URL y secreto en Ajustes, solo para administradores**, con firma HMAC-SHA256 y un id por aviso.
+
+## Decisiones de la IA dentro de lo aprobado
+
+- El bloque «Tienda en línea» va dentro de **Ajustes generales** y no como una sección propia: Odoo muestra cada sección de Ajustes con un icono propio, y este módulo no tiene.
+- Sin URL **o sin secreto** no se encola ningún aviso, para que nunca salga uno sin firma.
+- El calendario quedó en 1, 5, 15 y 60 minutos y cuatro intentos más cada 6 horas: unas 25 horas en total.
+- «Reintentar» vuelve a empezar la serie completa de reintentos.
+- Las redirecciones no se siguen (un 3xx es un fallo) y la espera por respuesta es de 10 segundos.
+- La tarea programada procesa hasta 50 avisos por corrida y como mucho durante 60 segundos, confirma cada aviso enviado para no reenviarlo si se corta, bloquea cada fila antes de enviarla (`FOR UPDATE SKIP LOCKED`) y se vuelve a programar para el próximo aviso pendiente sin esperar su intervalo de 5 minutos.
+- La entrega del aviso es «al menos una vez»: la tienda debe ignorar un id de aviso repetido. Queda en el README y en `openapi.yaml`.
+
+## Lo que la IA hizo mal (tramo C)
+
+- La primera versión de la prueba que comprueba que la clave de idempotencia no guarda el cuerpo hacía un reemplazo de texto enredado sobre el volcado del registro. Se simplificó antes del commit de pruebas.
+- El primer ejemplo de respuesta paginada del README mostraba en la misma página los productos 11 y 15 con un total de 3, lo que no cuadra con los datos de prueba documentados (los productos 12 a 14 también se venden). Salió al releer la documentación y se cambió por un ejemplo que sí cuadra.
+- Los ejemplos de `curl` del GET eran salidas reales del tramo A. Al cambiar el formato, la IA los iba a actualizar sin volver a correrlos; se dejó escrito en el README que el formato nuevo es el que fijan las pruebas y que no se volvieron a correr.
+
+## Cómo lo verifiqué (tramo C)
+
+- Pendiente: correr las pruebas en una base nueva de Odoo 18 y la prueba a mano del README (sección «Cómo se verificó (tramo C)»).
+- Sin Odoo se verificó que el Python compila, `ruff` (reglas F y E9), que los XML están bien formados y que `openapi.yaml` es OpenAPI 3.1 válido, con sus ejemplos dentro de sus esquemas. No se corrió `pylint_odoo`.
