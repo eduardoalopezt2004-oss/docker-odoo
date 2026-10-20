@@ -147,6 +147,20 @@ class TestPaymentConcurrency(PaymentRequestCommon):
             cr.execute("SELECT state, reject_reason FROM payment_request WHERE id = %s", [request_id])
             self.assertEqual(cr.fetchone(), ("approved", None))
 
+    def test_a_record_pointing_to_the_request_does_not_block_it(self):
+        """Crear un registro que apunta a la solicitud (por ejemplo, abrir el asistente de pago) no choca con el bloqueo.
+
+        Al revisar esa clave foránea, PostgreSQL toma FOR KEY SHARE sobre la fila de la solicitud.
+        """
+        request_id = self._committed_request()
+        db = sql_db.db_connect(get_db_name())
+        with db.cursor() as first, db.cursor() as second:
+            first.execute("SELECT id FROM payment_request WHERE id = %s FOR KEY SHARE", [request_id])
+            second.execute(SET_LOCK_TIMEOUT)
+            api.Environment(second, SUPERUSER_ID, {})["payment.request"].browse(request_id)._lock_for_update()
+            second.rollback()
+            first.rollback()
+
     def test_lock_is_free_when_nobody_else_has_it(self):
         request_id = self._committed_request()
         with sql_db.db_connect(self.env.cr.dbname).cursor() as cr:

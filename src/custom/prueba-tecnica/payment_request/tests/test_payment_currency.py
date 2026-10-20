@@ -4,6 +4,7 @@ from unittest.mock import patch
 from odoo import fields
 from odoo.exceptions import UserError
 from odoo.tests import tagged
+from odoo.tools.safe_eval import safe_eval
 
 from .common import PaymentRequestCommon
 
@@ -155,6 +156,36 @@ class TestPaymentCurrency(PaymentRequestCommon):
         self.assertEqual(currency, self.ves)
         self.assertEqual(amount, 4000.0)
         self.assertAlmostEqual(rate, VES_PER_USD, places=6)
+
+    def test_branch_can_pay_from_the_journals_of_its_main_company(self):
+        """Como en Odoo 18, una sucursal puede pagar desde los diarios de su compañía principal, nunca desde los de otra."""
+        branch = self.env["res.company"].create(
+            {"name": "Sucursal de diarios C", "parent_id": self.company.id, "currency_id": self.company.currency_id.id}
+        )
+        treasurer = self._create_user("tesoreria_sucursal_c", self.group_user | self.treasury_group, branch)
+        requester = self._create_user("solicitante_sucursal_diarios_c", self.group_user, branch)
+        request = self._new_request(requester, currency_id=self.usd.id, amount=100.0)
+        # El asistente le ofrece a Tesorería de la sucursal el banco en bolívares de la principal.
+        domain = safe_eval(self.env["payment.request.pay.wizard"]._fields["journal_id"].domain, {"company_id": branch.id})
+        self.assertIn(self.ves_journal, self.env["account.journal"].with_user(treasurer).search(domain))
+        request._check_payment_journal(self.ves_journal)
+        other = self.env["res.company"].create({"name": "Otra compañía C", "currency_id": self.company.currency_id.id})
+        other_request = self._new_request(self._create_user("solicitante_otra_c", self.group_user, other))
+        with self.assertRaises(UserError):
+            other_request._check_payment_journal(self.ves_journal)
+
+    def test_small_rate_is_stored_with_full_precision(self):
+        """Una tasa chica (por ejemplo, de bolívares a dólares) se guarda completa y su texto no usa notación científica."""
+        company_currency = self.company.currency_id
+        request = self._approved(currency_id=self.foreign.id, amount=3650.0)
+        self._wizard(request, self.company_journal, self.old_date).action_confirm()
+        expected = self.env["res.currency"]._get_conversion_rate(
+            self.foreign, company_currency, self.company, self.old_date
+        )
+        self.assertAlmostEqual(request.payment_rate, expected, places=12)
+        Request = self.env["payment.request"]
+        self.assertEqual(Request._format_rate(self.usd, self.ves, 40.0), "1 USD = 40 VES")
+        self.assertEqual(Request._format_rate(self.usd, self.ves, 6.3e-05), "1 USD = 0.000063 VES")
 
     def test_same_foreign_currency_needs_the_rate_of_the_day(self):
         """Solicitud y diario en la misma moneda extranjera: el monto no cambia, pero el asiento en la moneda

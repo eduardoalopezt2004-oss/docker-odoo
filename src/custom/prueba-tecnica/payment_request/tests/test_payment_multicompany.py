@@ -1,3 +1,4 @@
+from odoo import Command
 from odoo.exceptions import AccessError, UserError, ValidationError
 from odoo.tests import tagged
 
@@ -94,6 +95,29 @@ class TestPaymentMultiCompany(PaymentRequestCommon):
         with self.assertRaises(UserError):
             request.sudo().write({"company_id": self.company_b.id})
         self.assertEqual(request.company_id, self.company)
+
+    def test_number_follows_the_company_the_request_is_created_in(self):
+        """Si la compañía llega por el contexto (por ejemplo, desde una acción), el número usa el código de esa compañía."""
+        self.company.payment_request_code = "DA"
+        self.company_b.payment_request_code = "TA"
+        request = (
+            self.env["payment.request"]
+            .with_user(self.approver_ab)
+            .with_context(default_company_id=self.company_b.id)
+            .create({"partner_id": self.partner.id, "amount": 10.0, "concept": "Desde una acción de la compañía B"})
+        )
+        self.assertEqual(request.company_id, self.company_b)
+        self.assertTrue(request.name.startswith("TA/"), request.name)
+
+    def test_submit_fails_if_the_approver_lost_access_to_the_company(self):
+        """Si al aprobador del nivel le quitan la compañía, no se le asigna una solicitud que no podría ver."""
+        self.approver_b.write({"company_ids": [Command.set(self.company.ids)], "company_id": self.company.id})
+        request = self._new_request(self.requester_b)
+        with self.assertRaises(UserError) as error:
+            request.action_submit()
+        self.assertIn(self.approver_b.name, str(error.exception))
+        self.assertEqual(request.state, "draft")
+        self.assertFalse(request.approver_id)
 
     def test_search_view_groups_by_company_for_multi_company_users(self):
         search = self.env["payment.request"].with_user(self.approver_ab).get_views([(False, "search")])
