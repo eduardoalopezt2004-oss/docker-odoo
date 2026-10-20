@@ -1,6 +1,7 @@
+import time
 from unittest.mock import patch
 
-from odoo import SUPERUSER_ID, api, sql_db
+from odoo import SUPERUSER_ID, Command, api, sql_db
 from odoo.exceptions import UserError
 from odoo.tests import tagged
 
@@ -9,6 +10,9 @@ from odoo.addons.payment_request.models.payment_request import PaymentRequest
 from .common import PaymentRequestCommon
 
 QUIET = {"tracking_disable": True, "mail_create_nolog": True, "mail_create_nosubscribe": True}
+# Si alguien quitara NOWAIT, la segunda conexión esperaría a la primera, que está en este mismo hilo: la
+# prueba se colgaría. Con este límite falla a los 5 segundos.
+SET_LOCK_TIMEOUT = "SET LOCAL lock_timeout = '5s'"
 
 
 @tagged("post_install", "-at_install")
@@ -22,6 +26,7 @@ class TestPaymentConcurrency(PaymentRequestCommon):
     def _committed_request(self):
         db = sql_db.db_connect(self.env.cr.dbname)
         with db.cursor() as cr:
+            cr.execute(SET_LOCK_TIMEOUT)
             env = api.Environment(cr, SUPERUSER_ID, QUIET)
             partner = env["res.partner"].create({"name": "Proveedor de la prueba de concurrencia"})
             request = env["payment.request"].create(
@@ -33,8 +38,57 @@ class TestPaymentConcurrency(PaymentRequestCommon):
 
     def _delete_committed(self, request_id, partner_id):
         with sql_db.db_connect(self.env.cr.dbname).cursor() as cr:
+            cr.execute(SET_LOCK_TIMEOUT)
             cr.execute("DELETE FROM payment_request WHERE id = %s", [request_id])
             cr.execute("DELETE FROM res_partner WHERE id = %s", [partner_id])
+
+    def _committed_submitted_request(self):
+        """Solicitud enviada con su aprobador, confirmada en la base para que la vean otras conexiones.
+
+        Pasa a enviada por SQL: el envío normal necesita un nivel de aprobación confirmado, que cambiaría
+        el resultado de las demás pruebas mientras exista.
+
+        :return: (id de la solicitud, id del aprobador)
+        """
+        with sql_db.db_connect(self.env.cr.dbname).cursor() as cr:
+            cr.execute(SET_LOCK_TIMEOUT)
+            env = api.Environment(cr, SUPERUSER_ID, QUIET)
+            groups = env.ref("base.group_user") | env.ref("payment_request.group_payment_approver")
+            approver = (
+                env["res.users"]
+                .with_context(no_reset_password=True)
+                .create(
+                    {
+                        "name": "Aprobador de la prueba de concurrencia",
+                        "login": "aprobador_concurrencia_c",
+                        "email": "aprobador_concurrencia_c@example.com",
+                        "groups_id": [Command.set(groups.ids)],
+                    }
+                )
+            )
+            partner = env["res.partner"].create({"name": "Proveedor de la prueba de concurrencia"})
+            request = env["payment.request"].create(
+                {"partner_id": partner.id, "amount": 10.0, "concept": "Prueba de concurrencia"}
+            )
+            env.flush_all()
+            cr.execute(
+                "UPDATE payment_request SET state = 'submitted', approver_id = %s WHERE id = %s",
+                [approver.id, request.id],
+            )
+            ids = request.id, partner.id, approver.id
+        # Se ejecutan en orden inverso: primero la solicitud (que apunta al aprobador), después el usuario.
+        self.addCleanup(self._delete_committed_user, ids[2])
+        self.addCleanup(self._delete_committed, ids[0], ids[1])
+        return ids[0], ids[2]
+
+    def _delete_committed_user(self, user_id):
+        with sql_db.db_connect(self.env.cr.dbname).cursor() as cr:
+            cr.execute(SET_LOCK_TIMEOUT)
+            env = api.Environment(cr, SUPERUSER_ID, {})
+            user = env["res.users"].browse(user_id)
+            partner = user.partner_id
+            user.unlink()
+            partner.unlink()
 
     def test_second_person_gets_an_immediate_notice(self):
         request_id = self._committed_request()
@@ -42,12 +96,46 @@ class TestPaymentConcurrency(PaymentRequestCommon):
         with db.cursor() as first, db.cursor() as second:
             # La primera persona está procesando la solicitud: tiene la fila bloqueada.
             first.execute("SELECT id FROM payment_request WHERE id = %s FOR UPDATE", [request_id])
+            second.execute(SET_LOCK_TIMEOUT)
             env_second = api.Environment(second, SUPERUSER_ID, {})
+            start = time.monotonic()
             with self.assertRaises(UserError) as error:
                 env_second["payment.request"].browse(request_id)._lock_for_update()
+            # Al instante: la segunda persona no espera a que termine la primera.
+            self.assertLess(time.monotonic() - start, 1.0)
             self.assertIn("Otra persona está procesando esta solicitud", str(error.exception))
             second.rollback()
             first.rollback()
+
+    def test_two_tabs_of_the_approver_only_one_wins(self):
+        """El aprobador aprueba en una pestaña y rechaza en otra al mismo tiempo: gana la primera.
+
+        Desde el tramo B solo el aprobador asignado aprueba o rechaza, así que «dos aprobadores a la vez» es
+        la misma persona en dos pestañas o dispositivos. Cada una es una conexión propia a la base, y aquí
+        se usan los métodos reales, no solo el bloqueo.
+        """
+        request_id, approver_id = self._committed_submitted_request()
+        db = sql_db.db_connect(self.env.cr.dbname)
+        with db.cursor() as first, db.cursor() as second:
+            second.execute(SET_LOCK_TIMEOUT)
+            env_first = api.Environment(first, approver_id, QUIET)
+            env_second = api.Environment(second, approver_id, QUIET)
+            # Primera pestaña: aprueba y su transacción sigue abierta.
+            env_first["payment.request"].browse(request_id).action_approve()
+            # Segunda pestaña, a la vez: rechazar recibe el aviso y no cambia nada.
+            with self.assertRaises(UserError) as error:
+                env_second["payment.request"].browse(request_id)._reject("Falta la factura")
+            self.assertIn("Otra persona está procesando esta solicitud", str(error.exception))
+            second.rollback()
+            first.commit()
+            # La primera ya terminó: si la segunda vuelve a intentar, ve que la solicitud está aprobada.
+            with self.assertRaises(UserError) as error:
+                env_second["payment.request"].browse(request_id)._reject("Falta la factura")
+            self.assertIn("aprobada", str(error.exception))
+            second.rollback()
+        with db.cursor() as cr:
+            cr.execute("SELECT state, reject_reason FROM payment_request WHERE id = %s", [request_id])
+            self.assertEqual(cr.fetchone(), ("approved", None))
 
     def test_lock_is_free_when_nobody_else_has_it(self):
         request_id = self._committed_request()
