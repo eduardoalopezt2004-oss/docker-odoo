@@ -1,7 +1,7 @@
 {
     "name": "Solicitudes de pago",
     "summary": "Solicitudes de pago a proveedores con niveles de aprobación, pago y reporte",
-    "version": "18.0.1.1.0",
+    "version": "18.0.1.2.0",
     "category": "Accounting",
     "author": "Binaural",
     "license": "LGPL-3",

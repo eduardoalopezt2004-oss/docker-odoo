@@ -17,11 +17,12 @@ class PaymentRequest(models.Model):
     _description = "Solicitud de pago"
     _inherit = ["mail.thread", "mail.activity.mixin"]
     _order = "id desc"
+    _check_company_auto = True
 
     # Se fijan al crear: si el solicitante cambiara, un aprobador podría aprobar su propia solicitud.
     _FIXED_FIELDS = {"name", "requester_id"}
     # Campos que nadie puede cambiar fuera de borrador.
-    _LOCKED_FIELDS = {"partner_id", "amount", "currency_id", "date", "concept"}
+    _LOCKED_FIELDS = {"company_id", "partner_id", "amount", "currency_id", "date", "concept"}
     # Los escribe solo el propio módulo (con sudo()): el aprobador y su fecha, el motivo del rechazo y
     # el pago. Si un usuario los pudiera escribir, podría cambiar quién aprueba o dar por pagada la solicitud.
     _SYSTEM_FIELDS = {"approver_id", "approval_date", "reject_reason", "payment_id"}
@@ -35,7 +36,10 @@ class PaymentRequest(models.Model):
     }
 
     name = fields.Char(string="Número", required=True, readonly=True, copy=False, default=lambda self: _("Nuevo"))
-    partner_id = fields.Many2one("res.partner", string="Proveedor", required=True, tracking=True)
+    company_id = fields.Many2one(
+        "res.company", string="Compañía", required=True, index=True, default=lambda self: self.env.company
+    )
+    partner_id = fields.Many2one("res.partner", string="Proveedor", required=True, tracking=True, check_company=True)
     requester_id = fields.Many2one(
         "res.users",
         string="Solicitante",
@@ -159,12 +163,14 @@ class PaymentRequest(models.Model):
             raise UserError(_("Una solicitud solo se marca como pagada al registrar el pago."))
 
     def _get_approval_level(self):
-        """Nivel de aprobación que corresponde al monto, comparado en la moneda de la compañía.
+        """Nivel de aprobación que corresponde al monto, entre los de la compañía de la solicitud.
+
+        El monto se compara en la moneda de esa compañía.
 
         :raises UserError: si ningún nivel cubre el monto, o si el aprobador del nivel es quien pidió el pago
         """
         self.ensure_one()
-        company = self.env.company
+        company = self.company_id
         amount = self.currency_id._convert(self.amount, company.currency_id, company, self.date)
         level = self.env["payment.approval.level"].search(
             [("company_id", "=", company.id), ("min_amount", "<=", amount)], order="min_amount desc", limit=1

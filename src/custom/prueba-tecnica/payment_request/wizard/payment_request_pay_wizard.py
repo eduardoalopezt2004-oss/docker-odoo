@@ -15,7 +15,7 @@ class PaymentRequestPayWizard(models.TransientModel):
         required=True,
         domain="[('type', 'in', ('bank', 'cash')), ('company_id', '=', company_id)]",
     )
-    company_id = fields.Many2one("res.company", default=lambda self: self.env.company)
+    company_id = fields.Many2one(related="request_id.company_id")
     payment_date = fields.Date(string="Fecha del pago", required=True, default=fields.Date.context_today)
 
     def action_confirm(self):
