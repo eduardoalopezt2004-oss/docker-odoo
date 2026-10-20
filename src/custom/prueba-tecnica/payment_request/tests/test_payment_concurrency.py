@@ -107,7 +107,8 @@ class TestPaymentConcurrency(PaymentRequestCommon):
             second.execute(SET_LOCK_TIMEOUT)
             env_second = api.Environment(second, SUPERUSER_ID, {})
             start = time.monotonic()
-            with self.assertRaises(UserError) as error:
+            # El choque es esperado y se convierte en aviso: no debe quedar como error en el registro.
+            with self.assertNoLogs("odoo.sql_db", level="ERROR"), self.assertRaises(UserError) as error:
                 env_second["payment.request"].browse(request_id)._lock_for_update()
             # Al instante: la segunda persona no espera a que termine la primera.
             self.assertLess(time.monotonic() - start, 1.0)
