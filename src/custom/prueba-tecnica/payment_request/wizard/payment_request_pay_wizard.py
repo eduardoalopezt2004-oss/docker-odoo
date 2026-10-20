@@ -26,7 +26,7 @@ class PaymentRequestPayWizard(models.TransientModel):
     payment_amount = fields.Monetary(
         string="Monto a pagar", currency_field="payment_currency_id", compute="_compute_payment_preview"
     )
-    rate = fields.Float(string="Tasa", digits=(16, 6), compute="_compute_payment_preview")
+    rate = fields.Float(string="Tasa", digits=0, compute="_compute_payment_preview")
     rate_text = fields.Char(string="Tasa del día", compute="_compute_payment_preview")
     rate_warning = fields.Char(compute="_compute_payment_preview")
 
@@ -49,10 +49,8 @@ class PaymentRequestPayWizard(models.TransientModel):
             wizard.payment_amount = amount
             wizard.rate = rate
             if currency != wizard.request_id.currency_id:
-                wizard.rate_text = "1 %s = %s %s (tasa del %s)" % (
-                    wizard.request_id.currency_id.name,
-                    "%.10g" % rate,
-                    currency.name,
+                wizard.rate_text = "%s (tasa del %s)" % (
+                    wizard.request_id._format_rate(wizard.request_id.currency_id, currency, rate),
                     wizard.payment_date.strftime("%d/%m/%Y"),
                 )
 

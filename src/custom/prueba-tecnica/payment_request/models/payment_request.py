@@ -73,9 +73,10 @@ class PaymentRequest(models.Model):
     payment_amount = fields.Monetary(
         related="payment_id.amount", string="Monto pagado", currency_field="payment_currency_id"
     )
+    # Sin redondeo (digits=0), como las tasas de Odoo: una tasa chica, de bolívares a dólares, perdería decimales.
     payment_rate = fields.Float(
         string="Tasa del pago",
-        digits=(16, 6),
+        digits=0,
         readonly=True,
         copy=False,
         help="Unidades de la moneda del pago por cada unidad de la moneda de la solicitud, el día del pago.",
@@ -108,13 +109,17 @@ class PaymentRequest(models.Model):
     def _compute_payment_rate_text(self):
         for request in self:
             if request.payment_currency_id and request.payment_currency_id != request.currency_id:
-                request.payment_rate_text = "1 %s = %s %s" % (
-                    request.currency_id.name,
-                    "%.10g" % request.payment_rate,
-                    request.payment_currency_id.name,
+                request.payment_rate_text = self._format_rate(
+                    request.currency_id, request.payment_currency_id, request.payment_rate
                 )
             else:
                 request.payment_rate_text = False
+
+    @api.model
+    def _format_rate(self, from_currency, to_currency, rate):
+        """«1 USD = 40 VES»: la tasa con hasta 10 decimales, sin ceros de más ni notación científica."""
+        number = ("%.10f" % rate).rstrip("0").rstrip(".")
+        return "1 %s = %s %s" % (from_currency.name, number, to_currency.name)
 
     @api.model_create_multi
     def create(self, vals_list):
@@ -335,7 +340,7 @@ class PaymentRequest(models.Model):
         if currency == self.currency_id:
             return currency, self.amount, 1.0
         rate = self.env["res.currency"]._get_conversion_rate(self.currency_id, currency, company, payment_date)
-        return currency, currency.round(self.amount * rate), rate
+        return currency, self.currency_id._convert(self.amount, currency, company, payment_date), rate
 
     def _check_rate_of_the_day(self, currency, payment_date):
         """Falla si la tasa con que Odoo convertirá ``currency`` ese día no es de ese mismo día.
