@@ -278,6 +278,18 @@ class PaymentRequest(models.Model):
                     level.approver_id.display_name,
                 )
             )
+        # El nivel exige que el aprobador tenga la compañía, pero se la pueden quitar después: sin ella
+        # no vería la solicitud y nadie la podría aprobar. sudo() solo para leer sus compañías, que quien
+        # pide el pago no tiene por qué ver.
+        if company not in level.approver_id.sudo().company_ids:
+            raise UserError(
+                _(
+                    "Esta solicitud le corresponde aprobarla a %(approver)s, que no tiene acceso a %(company)s. "
+                    "Pide a un administrador que revise los niveles de aprobación.",
+                    approver=level.approver_id.display_name,
+                    company=company.display_name,
+                )
+            )
         return level
 
     def _assign_approver(self):
