@@ -148,7 +148,8 @@ class TestVehicleTypeMigration(TransactionCase):
 
     def test_batches_cover_every_row_and_count_batches(self):
         """33 inspecciones sin tipo (4 de setUpClass y 29 nuevas) en lotes de 7: 5 lotes, ninguna queda sin tipo."""
-        legacy_values = list(LEGACY_XMLIDS) * 6 + ["car"]
+        legacy_values = list(LEGACY_XMLIDS) * 7 + ["car"]
+        self.assertEqual(len(legacy_values), 29)
         extra = self._add_legacy_inspections(legacy_values)
         with self.assertLogs(MIGRATION_LOGGER, level="INFO") as logs:
             updated = map_legacy_vehicle_types(self.env, batch_size=7)
