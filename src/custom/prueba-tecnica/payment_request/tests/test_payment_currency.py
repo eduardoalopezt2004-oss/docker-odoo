@@ -4,6 +4,7 @@ from unittest.mock import patch
 from odoo import fields
 from odoo.exceptions import UserError
 from odoo.tests import tagged
+from odoo.tools.misc import format_date
 from odoo.tools.safe_eval import safe_eval
 
 from .common import PaymentRequestCommon
@@ -126,7 +127,7 @@ class TestPaymentCurrency(PaymentRequestCommon):
         with self.assertRaises(UserError) as error:
             self._wizard(request, self.ves_journal, self.no_rate_date).action_confirm()
         self.assertIn("tasa", str(error.exception))
-        self.assertIn(self.no_rate_date.strftime("%d/%m/%Y"), str(error.exception))
+        self.assertIn(format_date(self.env, self.no_rate_date), str(error.exception))
         self.assertEqual(request.state, "approved")
         self.assertFalse(self._payments(request))
         self.assertFalse(request.payment_rate)
@@ -140,7 +141,7 @@ class TestPaymentCurrency(PaymentRequestCommon):
         request = self._approved(currency_id=self.usd.id, amount=100.0)
         with self.assertRaises(UserError) as error:
             self._wizard(request, self.ves_journal, self.no_rate_date).action_confirm()
-        self.assertIn(self.no_rate_date.strftime("%d/%m/%Y"), str(error.exception))
+        self.assertIn(format_date(self.env, self.no_rate_date), str(error.exception))
         self.assertEqual(request.state, "approved")
         self.assertFalse(self._payments(request))
 
@@ -193,7 +194,7 @@ class TestPaymentCurrency(PaymentRequestCommon):
         request = self._approved(currency_id=self.foreign.id, amount=100.0)
         with self.assertRaises(UserError) as error:
             self._wizard(request, self.foreign_journal, self.no_rate_date).action_confirm()
-        self.assertIn(self.no_rate_date.strftime("%d/%m/%Y"), str(error.exception))
+        self.assertIn(format_date(self.env, self.no_rate_date), str(error.exception))
         self.assertEqual(request.state, "approved")
         self.assertFalse(self._payments(request))
         self._wizard(request, self.foreign_journal, self.pay_date).action_confirm()
@@ -210,6 +211,8 @@ class TestPaymentCurrency(PaymentRequestCommon):
         self.assertEqual(wizard.payment_amount, 4000.0)
         self.assertAlmostEqual(wizard.rate, VES_PER_USD, places=6)
         self.assertFalse(wizard.rate_warning)
+        # La fecha sale en el formato del idioma del usuario, igual que el campo «Fecha del pago».
+        self.assertIn(format_date(self.env, self.pay_date), wizard.rate_text)
         # Sin tasa del día: el asistente avisa antes de confirmar y no muestra un monto.
         wizard.payment_date = self.no_rate_date
         self.assertIn("No hay tasa", wizard.rate_warning)
