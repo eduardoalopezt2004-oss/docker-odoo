@@ -366,6 +366,22 @@ class PaymentRequest(models.Model):
                 )
             )
 
+    def _check_payment_journal(self, journal):
+        """Falla si el diario no se puede usar en la compañía de la solicitud.
+
+        Mismo criterio que Odoo 18 aplica a los diarios: los de esa compañía o los de sus compañías
+        principales, así una sucursal paga desde los bancos de su principal.
+        """
+        self.ensure_one()
+        if not journal.filtered_domain(journal._check_company_domain(self.company_id)):
+            raise UserError(
+                _(
+                    "El diario %(journal)s es de otra compañía que la solicitud (%(company)s).",
+                    journal=journal.display_name,
+                    company=self.company_id.display_name,
+                )
+            )
+
     def _pay(self, journal, payment_date):
         """Registra el pago al proveedor en contabilidad y marca la solicitud como pagada.
 
@@ -378,14 +394,7 @@ class PaymentRequest(models.Model):
         self._check_state_change("paid", final=False)
         if self.payment_id:
             raise UserError(_("La solicitud %s ya tiene un pago registrado.", self.name))
-        if journal.company_id != self.company_id:
-            raise UserError(
-                _(
-                    "El diario %(journal)s es de otra compañía que la solicitud (%(company)s).",
-                    journal=journal.display_name,
-                    company=self.company_id.display_name,
-                )
-            )
+        self._check_payment_journal(journal)
         currency, amount, rate = self._get_payment_terms(journal, payment_date)
         # sudo() solo para crear y publicar este pago: Tesorería no tiene permisos de Contabilidad y
         # no se los damos. Los datos del pago salen de la solicitud, no del usuario.

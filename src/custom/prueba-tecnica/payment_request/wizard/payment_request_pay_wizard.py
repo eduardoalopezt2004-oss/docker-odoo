@@ -14,7 +14,8 @@ class PaymentRequestPayWizard(models.TransientModel):
         "account.journal",
         string="Diario de pago",
         required=True,
-        domain="[('type', 'in', ('bank', 'cash')), ('company_id', '=', company_id)]",
+        # parent_of: una sucursal también paga desde los bancos de su compañía principal, como en Odoo.
+        domain="[('type', 'in', ('bank', 'cash')), ('company_id', 'parent_of', company_id)]",
     )
     company_id = fields.Many2one(related="request_id.company_id")
     payment_date = fields.Date(string="Fecha del pago", required=True, default=fields.Date.context_today)
