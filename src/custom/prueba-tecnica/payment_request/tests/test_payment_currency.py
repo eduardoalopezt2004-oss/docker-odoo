@@ -48,13 +48,31 @@ class TestPaymentCurrency(PaymentRequestCommon):
         ) or cls.env["account.journal"].create(
             {"name": "Banco C", "type": "bank", "code": "BNKC", "company_id": cls.company.id}
         )
+        # Una moneda extranjera para la compañía (VES, o USD si la compañía está en bolívares) y un diario en ella.
+        cls.foreign = cls.usd if company_currency == cls.ves else cls.ves
+        cls.foreign_journal = (
+            cls.ves_journal
+            if cls.foreign == cls.ves
+            else cls.env["account.journal"].create(
+                {
+                    "name": "Banco en dólares C",
+                    "type": "bank",
+                    "code": "BUSDC",
+                    "company_id": cls.company.id,
+                    "currency_id": cls.usd.id,
+                }
+            )
+        )
 
     @classmethod
-    def _set_ves_per_usd(cls, date, ves_per_usd):
+    def _set_ves_per_usd(cls, date, ves_per_usd, company=None):
         """Deja 1 USD = ves_per_usd VES en esa fecha, sea cual sea la moneda de la compañía.
 
         Las tasas de Odoo son unidades de la moneda por unidad de la moneda de la compañía.
+
+        :param company: compañía de la tasa; por defecto, la de la prueba. Vacía, una tasa sin compañía.
         """
+        company = cls.company if company is None else company
         company_currency = cls.company.currency_id
         if company_currency == cls.ves:
             rates = {cls.usd: 1.0 / ves_per_usd}
@@ -64,7 +82,7 @@ class TestPaymentCurrency(PaymentRequestCommon):
             rates = {cls.usd: 1.0, cls.ves: ves_per_usd}
         for currency, rate in rates.items():
             cls.env["res.currency.rate"].create(
-                {"currency_id": currency.id, "name": date, "rate": rate, "company_id": cls.company.id}
+                {"currency_id": currency.id, "name": date, "rate": rate, "company_id": company.id}
             )
 
     def _wizard(self, request, journal, date):
@@ -111,6 +129,48 @@ class TestPaymentCurrency(PaymentRequestCommon):
         self.assertEqual(request.state, "approved")
         self.assertFalse(self._payments(request))
         self.assertFalse(request.payment_rate)
+
+    def test_rate_check_looks_at_the_rate_odoo_converts_with(self):
+        """Odoo convierte con la tasa de la compañía aunque sea más vieja que una tasa sin compañía de ese día.
+
+        Si la comprobación aceptara la tasa sin compañía, el pago saldría con la tasa vieja sin ningún aviso.
+        """
+        self._set_ves_per_usd(self.no_rate_date, 50.0, company=self.env["res.company"])
+        request = self._approved(currency_id=self.usd.id, amount=100.0)
+        with self.assertRaises(UserError) as error:
+            self._wizard(request, self.ves_journal, self.no_rate_date).action_confirm()
+        self.assertIn(self.no_rate_date.strftime("%d/%m/%Y"), str(error.exception))
+        self.assertEqual(request.state, "approved")
+        self.assertFalse(self._payments(request))
+
+    def test_branch_pays_with_the_rates_of_its_main_company(self):
+        """En Odoo 18 las tasas solo se cargan en la compañía principal: una sucursal paga con ellas."""
+        branch = self.env["res.company"].create(
+            {"name": "Sucursal C de prueba", "parent_id": self.company.id, "currency_id": self.company.currency_id.id}
+        )
+        requester = self._create_user("solicitante_sucursal_c", self.group_user, branch)
+        request = self._new_request(requester, currency_id=self.usd.id, amount=100.0)
+        self.assertEqual(request.company_id, branch)
+        currency, amount, rate = request._get_payment_terms(self.ves_journal, self.pay_date)
+        self.assertEqual(currency, self.ves)
+        self.assertEqual(amount, 4000.0)
+        self.assertAlmostEqual(rate, VES_PER_USD, places=6)
+
+    def test_same_foreign_currency_needs_the_rate_of_the_day(self):
+        """Solicitud y diario en la misma moneda extranjera: el monto no cambia, pero el asiento en la moneda
+        de la compañía se calcula con la tasa, así que también se exige la de ese día."""
+        request = self._approved(currency_id=self.foreign.id, amount=100.0)
+        with self.assertRaises(UserError) as error:
+            self._wizard(request, self.foreign_journal, self.no_rate_date).action_confirm()
+        self.assertIn(self.no_rate_date.strftime("%d/%m/%Y"), str(error.exception))
+        self.assertEqual(request.state, "approved")
+        self.assertFalse(self._payments(request))
+        self._wizard(request, self.foreign_journal, self.pay_date).action_confirm()
+        self.assertEqual(request.state, "paid")
+        payment = self._payments(request)
+        self.assertEqual(payment.currency_id, self.foreign)
+        self.assertEqual(payment.amount, 100.0)
+        self.assertEqual(request.payment_rate, 1.0)
 
     def test_wizard_shows_amount_and_rate_before_paying(self):
         request = self._approved(currency_id=self.usd.id, amount=100.0)
