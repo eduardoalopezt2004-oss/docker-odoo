@@ -256,6 +256,8 @@ class ShopIntegrationController(http.Controller):
                 "partner_id": partner.id,
                 "user_id": env.uid,
                 "client_order_ref": external_ref,
+                # Marca el pedido para avisar a la tienda cuando se valide su entrega.
+                "shop_api_order": True,
                 "order_line": order_lines,
             }
         )
