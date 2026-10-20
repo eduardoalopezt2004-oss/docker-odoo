@@ -197,6 +197,10 @@ class PaymentRequest(models.Model):
         persona tiene la solicitud bloqueada porque está actuando sobre ella en este momento, NOWAIT
         hace que se avise de inmediato en lugar de esperar. Después se vuelve a leer la solicitud de la
         base, para validar sobre su estado real y no sobre lo que se leyó antes del bloqueo.
+
+        NO KEY UPDATE es el bloqueo que toma PostgreSQL al cambiar columnas que no son la clave: choca con
+        otro cambio de estado, pero no con quien solo crea un registro que apunta a la solicitud (por
+        ejemplo, al abrir el asistente de pago), que toma KEY SHARE.
         """
         if not self.ids:
             return
@@ -204,7 +208,7 @@ class PaymentRequest(models.Model):
             with self.env.cr.savepoint(flush=False):
                 # Sin registrar el error: el choque es esperado y se convierte en el aviso de abajo.
                 self.env.cr.execute(
-                    SQL("SELECT id FROM payment_request WHERE id IN %s FOR UPDATE NOWAIT", tuple(self.ids)),
+                    SQL("SELECT id FROM payment_request WHERE id IN %s FOR NO KEY UPDATE NOWAIT", tuple(self.ids)),
                     log_exceptions=False,
                 )
         except LockNotAvailable:
