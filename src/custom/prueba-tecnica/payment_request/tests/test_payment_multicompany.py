@@ -82,6 +82,19 @@ class TestPaymentMultiCompany(PaymentRequestCommon):
             request.sudo().write({"company_id": self.company_b.id})
         self.assertEqual(request.company_id, self.company)
 
+    def test_company_is_fixed_from_creation(self):
+        """El número lleva el código de la compañía con que se creó: cambiarla en borrador lo dejaría mal."""
+        self.company.payment_request_code = "DA"
+        self.company_b.payment_request_code = "TA"
+        request = self._new_request(self.approver_ab)
+        self.assertEqual(request.company_id, self.company)
+        self.assertTrue(request.name.startswith("DA/"), request.name)
+        with self.assertRaises(UserError):
+            request.write({"company_id": self.company_b.id})
+        with self.assertRaises(UserError):
+            request.sudo().write({"company_id": self.company_b.id})
+        self.assertEqual(request.company_id, self.company)
+
     def test_search_view_groups_by_company_for_multi_company_users(self):
         search = self.env["payment.request"].with_user(self.approver_ab).get_views([(False, "search")])
         arch = search["views"]["search"]["arch"]
