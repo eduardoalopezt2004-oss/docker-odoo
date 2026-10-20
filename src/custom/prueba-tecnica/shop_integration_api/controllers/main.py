@@ -4,6 +4,7 @@ import math
 import re
 import time
 from datetime import datetime
+from urllib.parse import urlencode
 
 from odoo import Command, http
 from odoo.exceptions import AccessError
@@ -12,7 +13,10 @@ from odoo.tools import float_is_zero
 
 _logger = logging.getLogger(__name__)
 
-ALLOWED_PARAMS = ("category_id", "in_stock", "modified_since")
+ALLOWED_PARAMS = ("category_id", "in_stock", "modified_since", "page", "page_size")
+PAGE_PARAMS = ("page", "page_size")
+DEFAULT_PAGE_SIZE = 100
+MAX_PAGE_SIZE = 500
 # Mayor valor de una columna integer de PostgreSQL: un id más grande haría
 # fallar la consulta con un error de base de datos.
 MAX_ID = 2147483647
@@ -151,9 +155,13 @@ class ShopIntegrationController(http.Controller):
 
     def _products(self):
         env = request.env
-        domain = self._products_domain(request.httprequest.args)
+        args = request.httprequest.args
+        domain = self._products_domain(args)
+        page, page_size = self._parse_page(args)
         # Los productos se buscan con los permisos del usuario de la API.
-        products = env["product.product"].with_context(display_default_code=False).search(domain, order="id")
+        Product = env["product.product"].with_context(display_default_code=False)
+        total = Product.search_count(domain)
+        products = Product.search(domain, order="id", offset=(page - 1) * page_size, limit=page_size)
         # sudo() solo para calcular free_qty de estos productos: el cálculo lee
         # stock.move, que pide el grupo Inventario / Usuario, y la API solo
         # devuelve el número. Las compañías siguen siendo las del usuario.
@@ -168,7 +176,43 @@ class ShopIntegrationController(http.Controller):
             }
             for product in products
         ]
-        return request.make_json_response({"count": len(result), "products": result})
+        next_url = None
+        if page * page_size < total:
+            # La página siguiente conserva los filtros de esta.
+            params = [(name, value) for name, value in args.items(multi=True) if name not in PAGE_PARAMS]
+            params += [("page", page + 1), ("page_size", page_size)]
+            next_url = "/api/v1/products?" + urlencode(params)
+        return request.make_json_response(
+            {
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+                "count": len(result),
+                "next": next_url,
+                "products": result,
+            }
+        )
+
+    def _parse_page(self, args):
+        """Página (desde 1) y productos por página (de 1 a MAX_PAGE_SIZE) de la consulta."""
+        env = request.env
+        page = self._parse_positive_int(args, "page", 1, MAX_ID, env._("page debe ser un número entero desde 1: %s"))
+        page_size = self._parse_positive_int(
+            args,
+            "page_size",
+            DEFAULT_PAGE_SIZE,
+            MAX_PAGE_SIZE,
+            env._("page_size debe ser un número entero de 1 a %(max)s: %%s", max=MAX_PAGE_SIZE),
+        )
+        return page, page_size
+
+    def _parse_positive_int(self, args, name, default, maximum, message):
+        if name not in args:
+            return default
+        value = args[name]
+        if not ID_RE.fullmatch(value) or int(value) > maximum:
+            raise InvalidParameter(name, message % value)
+        return int(value)
 
     def _create_order(self):
         env = request.env
@@ -363,7 +407,7 @@ class ShopIntegrationController(http.Controller):
                 raise InvalidParameter(
                     name,
                     env._(
-                        "Parámetro desconocido: %s. Los admitidos son category_id, in_stock y modified_since.",
+                        "Parámetro desconocido: %s. Los admitidos son category_id, in_stock, modified_since, page y page_size.",
                         name,
                     ),
                 )
