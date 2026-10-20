@@ -407,3 +407,14 @@ class TestPaymentApproval(TransactionCase):
         with self.assertRaisesRegex(UserError, "necesitas un correo"):
             request.with_user(request.approver_id).action_reject()
         self.assertEqual(request.state, "submitted")
+
+    def test_email_message_leaves_no_warning_in_the_log(self):
+        """El mensaje del correo faltante se traduce con el idioma del usuario, sin avisos en el registro."""
+        request = self._submitted()
+        request.approver_id.sudo().email = False
+        with self.assertNoLogs("odoo.tools.translate", level="WARNING"):
+            with self.assertRaisesRegex(UserError, "necesitas un correo"):
+                request.with_user(request.approver_id).action_reject()
+            with self.assertRaisesRegex(UserError, "necesitas un correo"):
+                self._reject(request, request.approver_id)
+        self.assertEqual(request.state, "submitted")
