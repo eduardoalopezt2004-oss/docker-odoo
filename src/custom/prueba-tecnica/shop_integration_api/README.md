@@ -620,6 +620,7 @@ Que salen de cómo funciona Odoo:
   - Entrega parcial sin entrega pendiente: 8 de 10 Escritorios, validados sin crear entrega pendiente. El aviso sale en el primer intento, con `fully_delivered: true`, y el receptor confirma la firma.
   - Entrega parcial con entrega pendiente y la tienda caída: 4 de 6 Estantes. La validación no espera. El aviso queda pendiente con el error y el próximo intento a un minuto. Con el receptor encendido sale en el segundo intento, con `fully_delivered: false`.
   - «Reintentar»: un aviso fallido vuelve a la cola y se envía.
+- Después, Eduardo confirmó en el navegador, en la misma base, que todo estaba así.
 
 ### Pasos de prueba a mano
 
