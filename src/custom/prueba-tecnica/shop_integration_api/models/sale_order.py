@@ -1,5 +1,4 @@
 from odoo import fields, models
-from odoo.tools import float_compare
 
 
 class SaleOrder(models.Model):
@@ -9,10 +8,13 @@ class SaleOrder(models.Model):
     shop_api_order = fields.Boolean(string="Creado por la API de la tienda", readonly=True, copy=False)
 
     def _shop_fully_delivered(self):
-        """True si ya se entregó todo lo que sale del almacén (servicios y notas no cuentan)."""
+        """True si ya no queda nada por entregar: ninguna entrega al cliente sin validar ni cancelar.
+
+        También es True cuando lo que falta se canceló (validar una entrega parcial sin entrega
+        pendiente): así la tienda sabe que no llegará otro aviso. Los servicios no generan entregas.
+        """
         self.ensure_one()
-        lines = self.order_line.filtered(lambda line: line.qty_delivered_method == "stock_move")
-        return all(
-            float_compare(line.qty_delivered, line.product_uom_qty, precision_rounding=line.product_uom.rounding) >= 0
-            for line in lines
+        pending = self.picking_ids.filtered(
+            lambda picking: picking.picking_type_code == "outgoing" and picking.state not in ("done", "cancel")
         )
+        return not pending
