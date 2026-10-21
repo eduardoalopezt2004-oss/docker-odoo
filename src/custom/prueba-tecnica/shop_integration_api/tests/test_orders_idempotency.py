@@ -1,9 +1,11 @@
 import json
+import threading
 from datetime import timedelta
 
-from odoo import fields
+from odoo import fields, sql_db
 from odoo.exceptions import AccessError
 from odoo.tests import HttpCase, new_test_user, tagged
+from odoo.tests.common import get_db_name
 
 ORDERS_URL = "/api/v1/orders"
 RIF = "J-22222222-2"
@@ -113,15 +115,41 @@ class TestOrdersIdempotency(HttpCase):
         self.assertEqual(len(self._orders("WEB-CORRIGE")), 1)
 
     def test_key_in_use_by_a_request_not_finished_is_409(self):
-        """Si otra petición con la misma clave todavía no terminó, se pide reintentar."""
-        self.env["shop.idempotency.key"].sudo().create(
-            {"user_id": self.store_user.id, "key": "en-curso", "request_hash": "x" * 64}
-        )
-        self._assert_error(self._post(self._body(ref="WEB-EN-CURSO"), "en-curso"), 409, "IDEMPOTENCY_KEY_IN_USE")
+        """Dos POST a la vez con la misma clave: el segundo espera en el índice único y recibe 409.
+
+        La primera petición la hace una conexión aparte: reserva la clave sin confirmar y la confirma
+        un segundo después, mientras la petición de la prueba espera. Hace falta un usuario confirmado
+        (el administrador) porque la otra conexión no ve los de esta transacción. La fila confirmada
+        se borra al terminar.
+        """
+        admin = self.env.ref("base.user_admin")
+        admin_key = self._make_key(admin)
+        first = sql_db.db_connect(get_db_name()).cursor()
+        try:
+            first.execute(
+                "INSERT INTO shop_idempotency_key (user_id, key, request_hash) VALUES (%s, %s, %s)",
+                [admin.id, "en-curso", "x" * 64],
+            )
+            self.addCleanup(self._delete_committed_key, admin.id, "en-curso")
+            timer = threading.Timer(1.0, first.commit)
+            timer.start()
+            # La colisión es esperada: no debe quedar como error de consulta en el registro de Odoo.
+            with self.assertNoLogs("odoo.sql_db", level="ERROR"):
+                response = self._post(self._body(ref="WEB-EN-CURSO"), "en-curso", api_key=admin_key)
+            timer.join()
+        finally:
+            first.close()
+        self._assert_error(response, 409, "IDEMPOTENCY_KEY_IN_USE")
         self.assertFalse(self._orders("WEB-EN-CURSO"))
 
+    def _delete_committed_key(self, user_id, key):
+        with sql_db.db_connect(get_db_name()).cursor() as cr:
+            cr.execute("DELETE FROM shop_idempotency_key WHERE user_id = %s AND key = %s", [user_id, key])
+
     def test_invalid_key(self):
-        for value in ("", "   ", "x" * 256, "clave\twith-tab", "clave-ñ"):
+        # "   " no se prueba: requests no deja mandar una cabecera que empieza con espacio, y el
+        # servidor recortaría los espacios igual que en "".
+        for value in ("", "x" * 256, "clave\twith-tab", "clave-ñ"):
             with self.subTest(value=value):
                 self._assert_error(self._post(self._body(ref="WEB-INVALIDA"), value), 400, "INVALID_IDEMPOTENCY_KEY")
         self.assertFalse(self._orders("WEB-INVALIDA"))

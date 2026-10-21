@@ -119,6 +119,9 @@ class TestDeliveryWebhook(TransactionCase):
         expected = "sha256=" + hmac.new(SECRET.encode(), body, hashlib.sha256).hexdigest()
         self.assertEqual(headers["X-Shop-Signature"], expected)
         self.assertTrue(kwargs["timeout"])
+        # Sin descargar el cuerpo de la respuesta (Odoo no lo usa): uno grande o lento no retiene el cron.
+        self.assertTrue(kwargs.get("stream"))
+        post.return_value.close.assert_called_once()
 
     def test_any_non_2xx_is_retried_on_schedule_until_failed(self):
         order = self._order()

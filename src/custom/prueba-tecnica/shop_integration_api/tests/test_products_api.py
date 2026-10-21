@@ -137,7 +137,8 @@ class TestProductsApi(HttpCase):
         self.assertEqual(self._ids(f"?category_id={self.categ_child.id}"), {self.p_child.id})
 
     def test_filter_in_stock(self):
-        response = self._get("?in_stock=true")
+        # Página grande: los productos de la prueba son los últimos por id.
+        response = self._get("?in_stock=true&page_size=500")
         self.assertEqual(response.status_code, 200, response.text)
         products = response.json()["products"]
         self.assertTrue(all(p["quantity"] > 0 for p in products))
@@ -202,7 +203,7 @@ class TestProductsApi(HttpCase):
         self.env.invalidate_all()
 
         def changed_variants():
-            response = self._get("?modified_since=2025-01-01")
+            response = self._get("?modified_since=2025-01-01&page_size=500")
             self.assertEqual(response.status_code, 200, response.text)
             return {p["id"]: p for p in response.json()["products"] if p["id"] in template.product_variant_ids.ids}
 
@@ -255,7 +256,8 @@ class TestProductsApi(HttpCase):
 
     def test_invalid_category(self):
         missing = self.env["product.category"].search([], order="id desc", limit=1).id + 1000
-        for value in ["abc", "0", "-1", "1.5", "", "99999999999", str(missing)]:
+        # "1" * 5000: Python no convierte a int textos de más de 4300 dígitos; no debe dar 500.
+        for value in ["abc", "0", "-1", "1.5", "", "99999999999", "1" * 5000, str(missing)]:
             with self.subTest(value=value):
                 self._assert_invalid(f"?category_id={value}", "category_id")
 

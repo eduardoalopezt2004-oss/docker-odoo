@@ -72,8 +72,8 @@ class TestProductsPagination(HttpCase):
 
     def test_invalid_page_and_page_size(self):
         self.authenticate("shop_page_user", "shop_page_user")
-        cases = [("page", value) for value in ("0", "-1", "abc", "1.5", "", "99999999999")]
-        cases += [("page_size", value) for value in ("0", "501", "abc", "")]
+        cases = [("page", value) for value in ("0", "-1", "abc", "1.5", "", "99999999999", "1" * 5000)]
+        cases += [("page_size", value) for value in ("0", "501", "abc", "", "1" * 5000)]
         for name, value in cases:
             with self.subTest(name=name, value=value):
                 response = self.url_open(f"{API_URL}?{name}={value}", allow_redirects=False)

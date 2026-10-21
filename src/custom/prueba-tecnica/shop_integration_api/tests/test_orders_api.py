@@ -285,6 +285,12 @@ class TestOrdersApi(HttpCase):
             with self.subTest(raw=raw):
                 self._assert_error(self._post(raw=raw), 400, "INVALID_JSON", None)
 
+    def test_lone_surrogate_is_invalid_json_not_500(self):
+        """JSON bien escrito con un sustituto suelto (\\ud800): no es texto Unicode y no se puede guardar."""
+        for raw in [json.dumps({**self._body(), "external_ref": "\ud800"}), json.dumps({"\udfff": 1})]:
+            with self.subTest(raw=raw):
+                self._assert_error(self._post(raw=raw), 400, "INVALID_JSON", None)
+
     def test_required_fields(self):
         cases = [
             ({"customer_rif": None}, "customer_rif"),
