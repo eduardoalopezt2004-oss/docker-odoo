@@ -15,7 +15,7 @@ class ShopIdempotencyKey(models.Model):
     user_id = fields.Many2one("res.users", string="Usuario de la API", required=True, ondelete="cascade", readonly=True)
     key = fields.Char(string="Clave", required=True, readonly=True)
     request_hash = fields.Char(string="Resumen del cuerpo (SHA-256)", required=True, readonly=True)
-    # Vacío solo mientras la petición que reservó la clave no termina.
+    # Se llena en la misma transacción que reserva la clave: confirmada, la clave siempre tiene pedido.
     order_id = fields.Many2one("sale.order", string="Pedido", ondelete="cascade", readonly=True)
 
     _sql_constraints = [

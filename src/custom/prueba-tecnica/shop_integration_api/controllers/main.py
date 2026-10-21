@@ -12,7 +12,7 @@ from psycopg2.errors import UniqueViolation
 from odoo import Command, http
 from odoo.exceptions import AccessError
 from odoo.http import request
-from odoo.tools import float_is_zero
+from odoo.tools import float_is_zero, mute_logger
 
 _logger = logging.getLogger(__name__)
 
@@ -24,6 +24,8 @@ MAX_PAGE_SIZE = 500
 # fallar la consulta con un error de base de datos.
 MAX_ID = 2147483647
 ID_RE = re.compile(r"[1-9][0-9]*")
+# Python no convierte a int un texto de más de 4300 dígitos: se mira el largo antes.
+MAX_ID_DIGITS = len(str(MAX_ID))
 # RIF: una letra y 9 dígitos, ya sin guiones, puntos ni espacios y en mayúscula.
 RIF_RE = re.compile(r"[VEJPGC][0-9]{9}")
 RIF_SEPARATORS_RE = re.compile(r"[-. ]")
@@ -215,9 +217,12 @@ class ShopIntegrationController(http.Controller):
         if name not in args:
             return default
         value = args[name]
-        if not ID_RE.fullmatch(value) or int(value) > maximum:
+        if not self._is_positive_int(value, maximum):
             raise InvalidParameter(name, message % value)
         return int(value)
+
+    def _is_positive_int(self, value, maximum):
+        return bool(ID_RE.fullmatch(value)) and len(value) <= MAX_ID_DIGITS and int(value) <= maximum
 
     def _create_order(self):
         env = request.env
@@ -302,22 +307,23 @@ class ShopIntegrationController(http.Controller):
                 env._("Esta Idempotency-Key ya se usó con otro contenido. Use una clave nueva para otro pedido."),
                 "Idempotency-Key",
             )
-        in_use = ApiError(
-            409,
-            "IDEMPOTENCY_KEY_IN_USE",
-            env._("Hay otra petición con esta Idempotency-Key que todavía no terminó. Reintente en unos segundos."),
-            "Idempotency-Key",
-        )
         if existing:
-            if not existing.order_id:
-                raise in_use
+            # La clave y su pedido se guardan en la misma transacción: otra petición nunca ve una
+            # clave sin pedido.
             return existing.order_id, None
         try:
-            # Dos peticiones a la vez con la misma clave: la restricción única de la base deja pasar una.
-            with env.cr.savepoint():
+            # Dos peticiones a la vez con la misma clave: la segunda espera en el índice único hasta
+            # que la primera termina y recibe la violación. Es un caso esperado: mute_logger evita
+            # que Odoo lo registre como un error de consulta.
+            with env.cr.savepoint(), mute_logger("odoo.sql_db"):
                 record = Keys.create({"user_id": env.uid, "key": key, "request_hash": request_hash})
         except UniqueViolation:
-            raise in_use from None
+            raise ApiError(
+                409,
+                "IDEMPOTENCY_KEY_IN_USE",
+                env._("Hay otra petición con esta Idempotency-Key que todavía no terminó. Reintente en unos segundos."),
+                "Idempotency-Key",
+            ) from None
         return None, record
 
     def _order_response(self, order, replayed=False):
@@ -347,6 +353,14 @@ class ShopIntegrationController(http.Controller):
             raise ApiError(400, "INVALID_JSON", request.env._("El cuerpo no es un JSON válido.")) from exc
         if not isinstance(body, dict):
             raise ApiError(400, "INVALID_JSON", request.env._("El cuerpo debe ser un objeto JSON."))
+        try:
+            # json acepta sustitutos sueltos (\ud800), que no son texto Unicode: guardarlos o
+            # devolverlos en un mensaje fallaría al pasarlos a UTF-8.
+            json.dumps(body, ensure_ascii=False).encode()
+        except UnicodeEncodeError as exc:
+            raise ApiError(
+                400, "INVALID_JSON", request.env._("El cuerpo tiene caracteres que no son texto Unicode válido.")
+            ) from exc
         return body
 
     def _parse_order(self, body):
@@ -516,7 +530,7 @@ class ShopIntegrationController(http.Controller):
 
     def _parse_category(self, value):
         env = request.env
-        if not ID_RE.fullmatch(value) or int(value) > MAX_ID:
+        if not self._is_positive_int(value, MAX_ID):
             raise InvalidParameter(
                 "category_id",
                 env._("category_id debe ser un número entero positivo (el id de la categoría): %s", value),
