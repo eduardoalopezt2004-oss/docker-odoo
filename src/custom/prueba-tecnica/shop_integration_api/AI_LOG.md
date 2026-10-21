@@ -141,3 +141,4 @@ Resúmenes, no citas textuales:
 - Mutaciones (stock por producto, contenido de la clave, devoluciones, envío durante la validación, página inicial): cada una hizo fallar sus pruebas.
 - Linter del repositorio: solo el aviso de autor OCA. `openapi.yaml`: OpenAPI 3.1 válido.
 - Por la hora, le pedí a la IA que recorriera la prueba en el navegador, como excepción. La hizo con un navegador automatizado (Playwright) sobre una base local actualizada desde el tramo A, con los mismos pasos que me había preparado, y me mostró las capturas de cada paso con lo que debía verse. Las revisé y di el visto bueno. El detalle está en el README.
+- Después confirmé en el navegador, en la misma base, que todo estaba así.
