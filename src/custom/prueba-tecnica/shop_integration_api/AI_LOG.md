@@ -93,6 +93,7 @@ Resúmenes, no citas textuales:
 4. Revisar el tramo sin subir nada hasta integrar el ejercicio 4, y después "continúa": correr las pruebas en Odoo, revisar el código y corregir lo que saliera.
    - La IA corrió el rojo de cada commit `[TEST]` y las pruebas completas, pasó `/code-review` y el linter del repositorio, y confirmó con mutaciones que las pruebas detectan los errores. Me dejó una decisión abierta: qué significa `fully_delivered` cuando lo que falta de un pedido se cancela.
 5. "Dame un ejemplo para decidir": la IA lo explicó con un pedido de 10 sillas y 6 en el almacén, con y sin entrega pendiente. Pregunté también cómo se entera el cliente de lo que falta; quedó explicado en el README («Cómo seguir un pedido con los avisos») y como pregunta a la tienda.
+6. "Comprueba con capturas si todo está como debería": la IA recorrió la prueba en el navegador y me mostró las capturas paso por paso. Confirmé.
 
 ## Qué decidí yo (tramo C)
 
@@ -139,4 +140,4 @@ Resúmenes, no citas textuales:
 - Rojo de cada commit `[TEST]` en una base nueva, por la razón esperada, y después las pruebas en una base nueva de Odoo 18: `0 failed, 0 error(s) of 89 tests` del módulo y `0 failed, 0 error(s) of 209 tests` de los cuatro módulos juntos. El detalle está en el README («Cómo se verificó (tramo C)»).
 - Mutaciones (stock por producto, contenido de la clave, devoluciones, envío durante la validación, página inicial): cada una hizo fallar sus pruebas.
 - Linter del repositorio: solo el aviso de autor OCA. `openapi.yaml`: OpenAPI 3.1 válido.
-- La prueba en el navegador no la hice yo: por la hora, le pedí a la IA que la hiciera, como excepción. La recorrió con un navegador automatizado (Playwright) sobre una base local actualizada desde el tramo A, con los mismos pasos que me había preparado, y revisó las capturas de cada paso. Todo salió como se esperaba; el detalle está en el README.
+- Por la hora, le pedí a la IA que recorriera la prueba en el navegador, como excepción. La hizo con un navegador automatizado (Playwright) sobre una base local actualizada desde el tramo A, con los mismos pasos que me había preparado, y me mostró las capturas de cada paso con lo que debía verse. Las revisé y di el visto bueno. El detalle está en el README.

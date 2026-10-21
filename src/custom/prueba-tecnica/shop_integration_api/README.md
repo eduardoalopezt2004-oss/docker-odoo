@@ -613,7 +613,7 @@ Que salen de cómo funciona Odoo:
 - Pruebas en una base nueva de Odoo 18 (`./odoo test -i prueba-tecnica -d <base_nueva> -m shop_integration_api`): `0 failed, 0 error(s) of 89 tests`. Los cuatro módulos juntos: `0 failed, 0 error(s) of 209 tests`.
 - Linter del repositorio (`.pylintrc` y `.pylintrc-mandatory`): solo marca que el autor del manifest no es la OCA, igual que en los otros módulos.
 - `openapi.yaml` es OpenAPI 3.1 válido (`openapi-spec-validator`).
-- Prueba a mano, en una base local actualizada desde el tramo A (`sia_navegador`), con los pasos de abajo. La recorrió la IA con un navegador automatizado (Playwright) y se revisó con capturas de cada paso, por pedido de Eduardo:
+- Prueba a mano, en una base local actualizada desde el tramo A (`sia_navegador`), con los pasos de abajo. La recorrió la IA con un navegador automatizado (Playwright), por pedido de Eduardo; él revisó las capturas de cada paso y dio el visto bueno:
   - Ajustes: el bloque «Tienda en línea» guarda la URL y el secreto.
   - GET: con `page_size=2` trae `"total": 6` y `next`; la página 3 trae `"next": null`.
   - `Idempotency-Key`: dos POST iguales devuelven el mismo pedido (`S00001`), el segundo con `Idempotent-Replayed: true`. Con otra cantidad, 409 `IDEMPOTENCY_KEY_REUSED`. En Ventas hay una sola cotización.
