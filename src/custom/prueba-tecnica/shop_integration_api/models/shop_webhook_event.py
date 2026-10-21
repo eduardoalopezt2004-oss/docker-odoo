@@ -154,7 +154,7 @@ class ShopWebhookEvent(models.Model):
                 continue
             event._send(url, secret)
             if auto_commit:
-                self.env.cr.commit()
+                self.env.cr.commit()  # pylint: disable=invalid-commit
         self._schedule_next_run()
 
     def _lock_if_due(self):
@@ -186,11 +186,16 @@ class ShopWebhookEvent(models.Model):
         }
         status, error = 0, False
         try:
-            response = requests.post(url, data=body, headers=headers, timeout=REQUEST_TIMEOUT, allow_redirects=False)
+            # stream=True: no se descarga el cuerpo de la respuesta, que Odoo no usa; así uno grande
+            # o lento no retiene la tarea programada.
+            response = requests.post(
+                url, data=body, headers=headers, timeout=REQUEST_TIMEOUT, allow_redirects=False, stream=True
+            )
         except requests.RequestException as exc:
             error = self.env._("La tienda no respondió: %s", exc)
         else:
             status = response.status_code
+            response.close()
             if not 200 <= status < 300:
                 error = self.env._("La tienda respondió con el código HTTP %s.", status)
         now = fields.Datetime.now()
