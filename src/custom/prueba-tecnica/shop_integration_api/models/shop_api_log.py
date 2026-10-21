@@ -12,7 +12,7 @@ class ShopApiLog(models.Model):
     _description = "Registro de llamadas a la API de la tienda"
     _order = "id desc"
 
-    endpoint = fields.Char(string="Endpoint", required=True, readonly=True)
+    endpoint = fields.Char(required=True, readonly=True)
     user_id = fields.Many2one("res.users", string="Usuario", readonly=True, ondelete="set null", index=True)
     status_code = fields.Integer(string="Código HTTP", required=True, readonly=True)
     duration_ms = fields.Integer(string="Duración (ms)", readonly=True)

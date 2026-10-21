@@ -249,7 +249,11 @@ class ShopIntegrationController(http.Controller):
                 raise ApiError(
                     422,
                     "INVALID_QUANTITY",
-                    env._("La cantidad %s queda en 0 en la unidad de venta del producto %s.", quantity, code),
+                    env._(
+                        "La cantidad %(quantity)s queda en 0 en la unidad de venta del producto %(code)s.",
+                        quantity=quantity,
+                        code=code,
+                    ),
                     f"lines[{index}].quantity",
                 )
             order_lines.append(Command.create({"product_id": product.id, "product_uom_qty": quantity}))
@@ -400,7 +404,11 @@ class ShopIntegrationController(http.Controller):
             if name not in allowed:
                 raise self._invalid_field(
                     f"{prefix}{name}",
-                    request.env._("Campo desconocido: %s%s. Los admitidos son %s.", prefix, name, ", ".join(allowed)),
+                    request.env._(
+                        "Campo desconocido: %(field)s. Los admitidos son %(allowed)s.",
+                        field=f"{prefix}{name}",
+                        allowed=", ".join(allowed),
+                    ),
                 )
 
     def _required_text(self, data, name, path):
