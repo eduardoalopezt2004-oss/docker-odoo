@@ -9,9 +9,8 @@
   - Revisión obligatoria de cada tramo contra los criterios del enunciado antes de cerrarlo.
   - Condición de cierre: pruebas en base nueva, linter del repositorio y mi verificación en el
     navegador antes de cada push.
-  - En el tramo B usé créditos de Claude Code en la nube para el trabajo más pesado (escribir el
-    código y las pruebas), para optimizar tiempo y créditos. Después lo probé y ajusté en el
-    entorno local.
+  - Usé créditos de Claude Code en la nube para parte del trabajo más pesado (escribir código y
+    pruebas), para optimizar tiempo y créditos. Después lo probé y ajusté en el entorno local.
 
 Delegué en la IA la redacción de código, pruebas y documentos, dentro de esas reglas. Mi trabajo
 fue definir el método, revisar y aprobar cada propuesta, decidir los supuestos y verificar el
@@ -91,6 +90,9 @@ Resúmenes, no citas textuales:
    - La IA planteó cinco decisiones: paginar siempre o solo cuando se pide; si `Idempotency-Key` es opcional u obligatoria y qué responder cuando se repite; qué entregas avisan a la tienda; con qué calendario se reintenta el aviso, y dónde se configura y cómo se firma.
 2. "Recomendadas": aprobé las cinco recomendaciones.
 3. Misma metodología que en los tramos anteriores: primero las pruebas, el código en commits separados por parte (paginación, idempotencia, aviso) y la documentación al final.
+4. Revisar el tramo sin subir nada hasta integrar el ejercicio 4, y después "continúa": correr las pruebas en Odoo, revisar el código y corregir lo que saliera.
+   - La IA corrió el rojo de cada commit `[TEST]` y las pruebas completas, pasó `/code-review` y el linter del repositorio, y confirmó con mutaciones que las pruebas detectan los errores. Me dejó una decisión abierta: qué significa `fully_delivered` cuando lo que falta de un pedido se cancela.
+5. "Dame un ejemplo para decidir": la IA lo explicó con un pedido de 10 sillas y 6 en el almacén, con y sin entrega pendiente. Pregunté también cómo se entera el cliente de lo que falta; quedó explicado en el README («Cómo seguir un pedido con los avisos») y como pregunta a la tienda.
 
 ## Qué decidí yo (tramo C)
 
@@ -99,6 +101,7 @@ Resúmenes, no citas textuales:
 - **Avisar en cada entrega validada** de los pedidos creados por la API, también las parciales.
 - **Reintentar cualquier respuesta que no sea 2xx** a los 1, 5, 15 y 60 minutos y luego cada 6 horas hasta cerca de un día; después, «Fallido» con un botón «Reintentar». El envío siempre en segundo plano, nunca durante la validación.
 - **URL y secreto en Ajustes, solo para administradores**, con firma HMAC-SHA256 y un id por aviso.
+- **`fully_delivered` es `true` cuando ya no queda nada por entregar**, también si lo que falta se cancela (validar una entrega parcial sin entrega pendiente). Antes solo era `true` si llegaba todo lo pedido: cuando se cancelaba lo que faltaba, la tienda se quedaba esperando un aviso que nunca llegaba.
 
 ## Decisiones de la IA dentro de lo aprobado
 
@@ -108,15 +111,32 @@ Resúmenes, no citas textuales:
 - «Reintentar» vuelve a empezar la serie completa de reintentos.
 - Las redirecciones no se siguen (un 3xx es un fallo) y la espera por respuesta es de 10 segundos.
 - La tarea programada procesa hasta 50 avisos por corrida y como mucho durante 60 segundos, confirma cada aviso enviado para no reenviarlo si se corta, bloquea cada fila antes de enviarla (`FOR UPDATE SKIP LOCKED`) y se vuelve a programar para el próximo aviso pendiente sin esperar su intervalo de 5 minutos.
-- La entrega del aviso es «al menos una vez»: la tienda debe ignorar un id de aviso repetido. Queda en el README y en `openapi.yaml`.
+- La entrega del aviso es «al menos una vez»: la tienda debe ignorar un id de aviso repetido, el `event_id` del cuerpo, que va firmado. Queda en el README y en `openapi.yaml`.
+- En la revisión: un cuerpo con un sustituto suelto (`\ud800`) responde 400 `INVALID_JSON` (no es texto Unicode válido); los enteros de la consulta se rechazan por largo antes de convertirlos; la colisión esperada de la clave de idempotencia no se registra como error de consulta (`mute_logger`); el aviso no descarga la respuesta de la tienda (`stream=True`); el `cr.commit()` de la tarea programada queda con su justificación para el linter.
+- No se aplicaron cuatro hallazgos de `/code-review`, con su motivo:
+  - Paginar solo cuando se pide, o con `/api/v2`: paginar siempre lo decidí yo, sabiendo que cambia el contrato.
+  - Paginar por id y firmar una marca de tiempo: cambian el contrato con la tienda; quedan como limitación y pregunta.
+  - El doble cálculo de stock con `in_stock=true`: en Odoo 18 ese filtro es una consulta agrupada sobre las existencias (`_search_field_by_quants`), no un cálculo por producto.
+  - Los disparadores que la tarea programada deja para el próximo aviso: Odoo los borra solo a la semana (`_gc_cron_triggers`).
 
 ## Lo que la IA hizo mal (tramo C)
 
 - La primera versión de la prueba que comprueba que la clave de idempotencia no guarda el cuerpo hacía un reemplazo de texto enredado sobre el volcado del registro. Se simplificó antes del commit de pruebas.
 - El primer ejemplo de respuesta paginada del README mostraba en la misma página los productos 11 y 15 con un total de 3, lo que no cuadra con los datos de prueba documentados (los productos 12 a 14 también se venden). Salió al releer la documentación y se cambió por un ejemplo que sí cuadra.
 - Los ejemplos de `curl` del GET eran salidas reales del tramo A. Al cambiar el formato, la IA los iba a actualizar sin volver a correrlos; se dejó escrito en el README que el formato nuevo es el que fijan las pruebas y que no se volvieron a correr.
+- Escribió dos pruebas que fallaban con el código correcto, porque las escribió sin correrlas. La del 409 `IDEMPOTENCY_KEY_IN_USE` sembraba una clave con otro resumen del cuerpo, así que el código respondía `IDEMPOTENCY_KEY_REUSED`. La de la clave `"   "` no llegaba al servidor: `requests` no deja mandar una cabecera que empieza con espacio. Salieron en la primera corrida en Odoo (`1 failed, 1 error(s) of 86 tests`).
+- Dejó una rama de código que ninguna petición podía alcanzar (una clave confirmada sin pedido), y la prueba del 409 apuntaba a esa rama y no a dos peticiones a la vez. Lo encontró `/code-review`; ahora la prueba usa una conexión aparte que reserva la clave mientras la petición espera.
+- Dos datos mal escritos daban 500: un entero de miles de dígitos en `page`, `page_size` o `category_id` (este desde el tramo A) y un sustituto suelto en el cuerpo del POST (desde el tramo B). La colisión esperada de la clave dejaba un error de consulta en el registro de Odoo, y el aviso descargaba la respuesta entera de la tienda. Lo encontró `/code-review`; se agregaron pruebas que fallaban (`7 failed, 0 error(s) of 87 tests`) y se corrigió.
+- El README y `openapi.yaml` pedían descartar avisos repetidos por la cabecera `X-Shop-Event-Id`, que no va firmada. Además, la recomendación del tramo A para las bajas («una consulta sin `modified_since`») ya no servía con la paginación: la tienda retiraría productos que siguen a la venta. Lo encontró `/code-review`.
+- `fully_delivered` nunca llegaba a `true` si lo que faltaba se cancelaba. Lo encontró `/code-review`; lo decidí yo con un ejemplo.
+- El README decía que las devoluciones no avisan, pero ninguna prueba lo fijaba: quitar el filtro de entregas de salida no rompía nada. Salió al elegir las mutaciones; se agregó la prueba.
+- El tramo B había dejado tres avisos del linter del repositorio (dos mensajes traducibles con varios valores sin nombre y un `string` redundante) que ningún documento mencionaba. Salieron al correr el linter en el tramo C.
+- En la primera corrida de mutaciones aplicó cinco a la vez, y una tapó a otra: la página vacía hacía fallar la prueba de consultas antes de comparar el número. Se corrió esa mutación sola.
+- En el tramo B recomendó un usuario de la tienda con lo mínimo, pero no advirtió qué pasa al actualizar una base que tenía el tramo A sin Ventas. Odoo instala Ventas y Facturación y da a todos los usuarios internos los grupos de su plantilla de usuario por defecto, entre ellos los de administrador. Salió al preparar la base de la prueba en el navegador: el usuario de la tienda quedó como administrador de Ventas y de Facturación. Se comprobó en el código de Odoo 18 (`_apply_groups_to_existing_employees`) y quedó en «Seguridad» del README.
 
 ## Cómo lo verifiqué (tramo C)
 
-- Pendiente: correr las pruebas en una base nueva de Odoo 18 y la prueba a mano del README (sección «Cómo se verificó (tramo C)»).
-- Sin Odoo se verificó que el Python compila, `ruff` (reglas F y E9), que los XML están bien formados y que `openapi.yaml` es OpenAPI 3.1 válido, con sus ejemplos dentro de sus esquemas. No se corrió `pylint_odoo`.
+- Rojo de cada commit `[TEST]` en una base nueva, por la razón esperada, y después las pruebas en una base nueva de Odoo 18: `0 failed, 0 error(s) of 89 tests` del módulo y `0 failed, 0 error(s) of 209 tests` de los cuatro módulos juntos. El detalle está en el README («Cómo se verificó (tramo C)»).
+- Mutaciones (stock por producto, contenido de la clave, devoluciones, envío durante la validación, página inicial): cada una hizo fallar sus pruebas.
+- Linter del repositorio: solo el aviso de autor OCA. `openapi.yaml`: OpenAPI 3.1 válido.
+- La prueba en el navegador no la hice yo: por la hora, le pedí a la IA que la hiciera, como excepción. La recorrió con un navegador automatizado (Playwright) sobre una base local actualizada desde el tramo A, con los mismos pasos que me había preparado, y revisó las capturas de cada paso. Todo salió como se esperaba; el detalle está en el README.

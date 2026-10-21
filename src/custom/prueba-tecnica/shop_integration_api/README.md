@@ -6,7 +6,7 @@ Ejercicio 1 de la prueba técnica. La tienda en línea del cliente consulta en O
 
 - [x] A: `GET /api/v1/products` con sesión de usuario, filtros y errores claros.
 - [x] B: `POST /api/v1/orders` (crea una cotización), autenticación con clave (Bearer) y registro de llamadas. El `GET` acepta la clave o la sesión.
-- [x] C: paginación con total, página y siguiente; `Idempotency-Key` en el POST; consultas del GET que no crecen con los productos; aviso firmado a la tienda al validar la entrega, con reintentos; `openapi.yaml`. Las pruebas están escritas pero no se han ejecutado en Odoo (ver [Cómo se verificó (tramo C)](#cómo-se-verificó-tramo-c)).
+- [x] C: paginación con total, página y siguiente; `Idempotency-Key` en el POST; consultas del GET que no crecen con los productos; aviso firmado a la tienda al validar la entrega, con reintentos; `openapi.yaml`. Probado en Odoo en bases nuevas (ver [Cómo se verificó (tramo C)](#cómo-se-verificó-tramo-c)).
 
 ## Conectarse
 
@@ -45,7 +45,12 @@ La sesión vence por inactividad. Si una consulta responde 401, hay que repetir 
 
 ### Varias bases de datos
 
-Si el servidor tiene varias bases y no tiene `db_filter`, una llamada sin cookie de sesión recibe un 404 de Odoo (sin JSON) antes de llegar a este módulo, porque no sabe en qué base buscar la ruta. Pasa en el entorno local. En producción se resuelve con `db_filter` (o `dbfilter` en `odoo.conf`) para que el servidor tenga una sola base visible; para probar en local, también sirve abrir una sesión en el navegador o arrancar con `--db-filter='^<base>$'`.
+Si el servidor tiene varias bases y no tiene `db_filter`, una llamada sin cookie de sesión recibe un 404 de Odoo (sin JSON) antes de llegar a este módulo, porque no sabe en qué base buscar la ruta. Pasa en el entorno local. En producción se resuelve con `db_filter` (o `dbfilter` en `odoo.conf`) para que el servidor tenga una sola base visible; para probar en local, también sirve arrancar con `--db-filter='^<base>$'`. Con `curl`, otra salida es pedir antes `/web/login?db=<base>` guardando la cookie y mandarla junto con la clave: la cookie solo le dice a Odoo la base, y quien llama sigue siendo el dueño de la clave.
+
+```bash
+curl -s -c cookies.txt -o /dev/null "http://localhost:8069/web/login?db=<base>"
+curl -s -b cookies.txt -H "Authorization: Bearer <clave>" "http://localhost:8069/api/v1/products?page_size=2"
+```
 
 ## `GET /api/v1/products`
 
@@ -106,7 +111,7 @@ Para recorrer el catálogo:
 1. Pedir la primera página con los filtros que hagan falta: `/api/v1/products?in_stock=true&page_size=200`.
 2. Mientras `next` no sea `null`, pedir la ruta de `next` (lleva los mismos filtros y el mismo `page_size`).
 
-Una página después de la última responde `200` con la lista vacía y `next: null`. Un `page` o `page_size` que no sea un entero en su rango responde 400 `INVALID_PARAMETER` con el parámetro en `field`. La lista va ordenada por `id`, así que las páginas no se mezclan entre llamadas, pero si se crea o se archiva un producto mientras la tienda recorre las páginas, un producto puede saltarse o repetirse (ver [Tramo C: supuestos, limitaciones y preguntas](#tramo-c-supuestos-limitaciones-y-preguntas)).
+Una página después de la última responde `200` con la lista vacía y `next: null`. Un `page` o `page_size` que no sea un entero en su rango responde 400 `INVALID_PARAMETER` con el parámetro en `field`. La lista va ordenada por `id`, así que las páginas no se mezclan entre llamadas, pero si el conjunto cambia mientras la tienda recorre las páginas (se crea o se archiva un producto, o con `in_stock=true` uno se queda sin stock o vuelve a tenerlo), un producto puede saltarse o repetirse (ver [Tramo C: supuestos, limitaciones y preguntas](#tramo-c-supuestos-limitaciones-y-preguntas)).
 
 La cantidad de consultas a la base no crece con los productos de la página: la cantidad libre se calcula para toda la página de una vez. Lo fija la prueba `test_query_count_does_not_grow_with_products`, que compara 3 y 30 productos.
 
@@ -250,7 +255,8 @@ Cuando en Odoo se valida una entrega de un pedido creado por `POST /api/v1/order
 
 - **En segundo plano.** Al validar, Odoo solo deja el aviso en una cola; lo envía una tarea programada (`Tienda en línea: enviar avisos de entrega`) en cuanto puede. Si la tienda está caída o tarda, quien valida la entrega no espera ni ve ningún error.
 - **Reintentos.** Cualquier respuesta que no sea 2xx, o ninguna respuesta en 10 segundos, cuenta como fallo. Se reintenta a los 1, 5, 15 y 60 minutos y luego cada 6 horas, cuatro veces más: unas 25 horas en total. Después el aviso queda **Fallido**. Las redirecciones no se siguen: un 3xx también es un fallo.
-- **Al menos una vez.** Si Odoo se cae justo después de enviar y antes de anotar el envío, el aviso puede llegar dos veces. La tienda debe ignorar un `X-Shop-Event-Id` que ya procesó.
+- **Al menos una vez.** Si Odoo se cae justo después de enviar y antes de anotar el envío, el aviso puede llegar dos veces. La tienda debe ignorar un aviso cuyo `event_id` ya procesó. Ese id va en el cuerpo, que está firmado. La cabecera `X-Shop-Event-Id` trae el mismo valor pero no va firmada: para descartar repetidos se usa el del cuerpo, después de verificar la firma.
+- **Sin orden garantizado.** Un aviso que falló sale en su reintento, y para entonces puede haber llegado otro más nuevo del mismo pedido. Para saber cuál es el último, la tienda compara `delivery.date_done`.
 
 ### Qué recibe la tienda
 
@@ -259,7 +265,7 @@ Cabeceras:
 | Cabecera | Qué es |
 |---|---|
 | `Content-Type` | `application/json` |
-| `X-Shop-Event-Id` | Id único del aviso (UUID). Es el mismo en cada reintento |
+| `X-Shop-Event-Id` | Id único del aviso (UUID), igual al `event_id` del cuerpo y el mismo en cada reintento. No va firmado: para descartar repetidos, usar el del cuerpo |
 | `X-Shop-Signature` | `sha256=` y el HMAC-SHA256 en hexadecimal del cuerpo, con el secreto configurado en Odoo |
 
 Cuerpo:
@@ -285,9 +291,22 @@ Cuerpo:
 | `delivery.name` | Número de la entrega en Odoo |
 | `delivery.date_done` | Fecha y hora de la validación, en UTC |
 | `delivery.lines` | Lo que salió en **esta** entrega: id y referencia del producto (los mismos del GET) y cantidad, en la unidad del pedido |
-| `fully_delivered` | `true` si con esta entrega el pedido quedó entregado completo. Los servicios no cuentan |
+| `fully_delivered` | `true` si con esta entrega ya no queda nada por entregar del pedido: lo que faltaba se entregó o se canceló. No quiere decir que llegó todo lo pedido: para saber cuánto llegó, sumar `delivery.lines` de los avisos del pedido. Los servicios no cuentan |
 
 El aviso no lleva precios ni datos del cliente: la tienda ya los tiene.
+
+### Cómo seguir un pedido con los avisos
+
+La tienda sabe lo que pidió; con los avisos sabe lo que salió y si falta algo. Por ejemplo, un pedido de 10 sillas cuando en el almacén hay 6:
+
+| Qué pasa en Odoo | Avisos que llegan | Qué deduce la tienda |
+|---|---|---|
+| Se validan 6 y se crea una entrega pendiente con las otras 4 | 6 sillas con `fully_delivered: false`; cuando se valida la pendiente, 4 sillas con `fully_delivered: true` | Con el primero: llegaron 6 y las 4 restantes vienen en otra entrega. Con el segundo: pedido completo |
+| Se validan 6 sin crear entrega pendiente (Odoo cancela las otras 4) | 6 sillas con `fully_delivered: true` | No viene nada más: pidió 10 y llegaron 6, así que se cancelaron 4 |
+
+El aviso no dice cuándo saldrá lo pendiente. Si alguien cancela en Odoo una entrega pendiente sin validar nada, no sale ningún aviso (ver [Tramo C: supuestos, limitaciones y preguntas](#tramo-c-supuestos-limitaciones-y-preguntas)).
+
+Odoo no le escribe por su cuenta al cliente de la tienda: eso lo hace la tienda con estos avisos. Si se prefiere que Odoo mande un correo al cliente en cada entrega validada, se activa en **Inventario → Configuración → Ajustes**, opción «Confirmación de correo electrónico». En ese caso conviene que la tienda no mande el suyo, para que el cliente no reciba dos.
 
 ### Cómo verifica la firma la tienda
 
@@ -388,6 +407,7 @@ curl -s -b cookies.txt "http://localhost:8069/api/v1/products?categ=7"
 - La lógica de cada llamada corre dentro de un savepoint: si algo falla se deshace lo escrito y el log se escribe igual.
 - Tramo C, `Idempotency-Key`: las claves se leen y se crean con `sudo()`, solo las del usuario que llama, porque el usuario de la tienda no tiene permisos sobre ese modelo (igual que con el log). La respuesta repetida lee el pedido con `sudo()` porque quien revisa la cotización puede haberle cambiado el vendedor, y la respuesta debe ser la misma. Una restricción única en la base (`unique(user_id, key)`) impide dos pedidos con la misma clave aunque lleguen dos llamadas a la vez.
 - Tramo C, aviso: se encola con `sudo()` porque quien valida puede ser un almacenista sin permisos sobre pedidos de venta ni sobre los avisos; solo se leen las entregas validadas y sus pedidos. La URL y el secreto están en los parámetros del sistema, que solo leen los administradores; el secreto se muestra oculto en Ajustes. El aviso va firmado (HMAC-SHA256) y sin datos del cliente, y no se envía sin firma.
+- **Al actualizar una base que tenía el tramo A**, revisar los grupos del usuario de la tienda. Desde el tramo B el módulo depende de Ventas, así que Odoo instala Ventas y Facturación si no estaban. Al instalarlos, Odoo da a todos los usuarios internos que ya existen los grupos de su plantilla de usuario por defecto, entre ellos **Ventas / Administrador** y **Facturación / Administrador**, también al usuario de la tienda. Después de actualizar hay que dejarle solo «Usuario interno» y **Ventas / Usuario: solo documentos propios**. Si no, su clave sirve para administrar Ventas y Facturación.
 
 ## Cómo probarlo
 
@@ -406,7 +426,7 @@ Las pruebas (`tests/test_products_api.py`) llaman a la API por HTTP con un usuar
 | Cada filtro solo | `test_filter_category_includes_subcategories`, `test_filter_in_stock`, `test_filter_in_stock_false_is_no_filter`, `test_filter_modified_since`, `test_filter_modified_since_variant_attributes` |
 | Filtros combinados | `test_filters_combined` (seis combinaciones, una con resultado vacío) |
 | Fecha mal escrita: 400 claro, nunca 500 | `test_invalid_date` (once valores: mes 13, 30 de febrero, `01/10/2026`, con espacio, con huso horario, dígitos de ancho completo, vacío...) |
-| Otros valores inválidos | `test_invalid_category`, `test_invalid_in_stock`, `test_unknown_and_repeated_parameters` |
+| Otros valores inválidos | `test_invalid_category` (incluye un id de 5000 dígitos), `test_invalid_in_stock`, `test_unknown_and_repeated_parameters` |
 | Acceso | `test_requires_credentials`, `test_portal_user_forbidden`, `test_access_error_is_forbidden`, `test_only_get`, `test_api_user_has_no_inventory_rights` |
 | Error inesperado sin detalles | `test_unexpected_error_is_json_without_details` |
 
@@ -419,12 +439,15 @@ Las del tramo C:
 | Paginación con total, página y siguiente; `next` conserva los filtros | `test_products_pagination.py`: `test_pages_with_metadata_and_next`, `test_next_keeps_every_filter`, `test_defaults_and_maximum`, `test_page_beyond_the_last_is_empty`, `test_invalid_page_and_page_size` |
 | Las consultas del GET no crecen con los productos | `test_query_count_does_not_grow_with_products` (3 y 30 productos, mismas consultas) |
 | `Idempotency-Key`: misma clave y contenido, mismo pedido; otro contenido, 409 | `test_orders_idempotency.py`: `test_same_key_same_content_returns_the_same_order`, `test_same_content_written_differently_is_the_same`, `test_same_key_other_content_is_409` |
-| Sin clave o con claves distintas, pedidos distintos; claves por usuario; un 422 no gasta la clave; clave en uso; clave inválida | `test_without_key_each_post_creates_an_order`, `test_different_keys_create_different_orders`, `test_keys_are_per_api_user`, `test_failed_request_does_not_use_the_key`, `test_key_in_use_by_a_request_not_finished_is_409`, `test_invalid_key` |
+| Sin clave o con claves distintas, pedidos distintos; claves por usuario; un 422 no gasta la clave; clave inválida | `test_without_key_each_post_creates_an_order`, `test_different_keys_create_different_orders`, `test_keys_are_per_api_user`, `test_failed_request_does_not_use_the_key`, `test_invalid_key` |
+| Dos peticiones a la vez con la misma clave: la segunda recibe 409 `IDEMPOTENCY_KEY_IN_USE` y no crea pedido | `test_key_in_use_by_a_request_not_finished_is_409` (una conexión aparte reserva la clave mientras la petición espera) |
+| Cuerpo con un sustituto suelto: 400, no 500 | `test_orders_api.py`: `test_lone_surrogate_is_invalid_json_not_500` |
 | Las claves no guardan el cuerpo y solo las leen administradores; unicidad en la base | `test_keys_store_no_body_and_only_admins_read_them`, `test_unique_key_per_user_in_the_database` |
 | Validar la entrega encola el aviso sin llamar a la tienda | `test_delivery_webhook.py`: `test_validating_the_delivery_queues_a_notice_without_calling_the_store` |
 | Tienda caída: quien valida no se bloquea ni ve el error | `test_store_down_does_not_block_whoever_validates` |
 | Contenido, firma y reintentos | `test_payload`, `test_successful_send_is_signed_and_marked_sent`, `test_any_non_2xx_is_retried_on_schedule_until_failed`, `test_manual_retry_of_a_failed_notice` |
-| Cuándo se avisa | `test_each_partial_delivery_notifies`, `test_only_orders_created_by_the_api_notify`, `test_without_url_nothing_is_queued`, `test_post_marks_the_order` |
+| Cuándo se avisa | `test_each_partial_delivery_notifies`, `test_only_orders_created_by_the_api_notify`, `test_returns_do_not_notify`, `test_without_url_nothing_is_queued`, `test_post_marks_the_order` |
+| `fully_delivered` con lo que falta cancelado | `test_partial_delivery_without_backorder_has_nothing_left_to_deliver` |
 | Ajustes y permisos | `test_settings_store_url_and_secret`, `test_only_admins_see_the_notices` |
 
 Las pruebas del aviso no llaman a ninguna tienda real: reemplazan `requests.post` por una respuesta simulada.
@@ -475,14 +498,19 @@ Todos con fecha de modificación 2026-10-01 00:00:00 UTC.
 
 ## Preguntas al cliente
 
-1. ¿La cantidad que publica la tienda debe ser la libre (a mano menos reservado) o la que hay a mano?
-2. ¿La tienda vende servicios o solo productos físicos? Hoy los servicios salen con cantidad 0.
-3. ¿Los precios se publican con impuestos? ¿En qué moneda, y con alguna lista de precios?
-4. ¿Cómo debe enterarse la tienda de que un producto dejó de venderse? (ver la primera limitación)
+Sobre lo que necesita la tienda:
+
+1. ¿La tienda vende servicios o solo productos físicos? Hoy los servicios salen con cantidad 0.
+2. ¿Los precios se publican con impuestos? ¿En qué moneda, y con alguna lista de precios?
+
+Que salen de cómo funciona Odoo:
+
+3. ¿La cantidad que publica la tienda debe ser la libre (a mano menos reservado) o la que hay a mano? Odoo separa lo que ya está reservado para otras entregas.
+4. ¿Cómo debe enterarse la tienda de que un producto dejó de venderse? Un producto archivado o que deja de venderse desaparece de la respuesta, también con `modified_since`, así que la tienda no recibe una señal de la baja (ver la primera limitación).
 
 ## Limitaciones conocidas
 
-- Un producto archivado o que deja de venderse desaparece de la respuesta. Con `modified_since`, la tienda no recibe ninguna señal de esa baja. Mientras tanto, la tienda puede hacer cada cierto tiempo una consulta sin `modified_since` y retirar los productos que ya no vienen.
+- Un producto archivado o que deja de venderse desaparece de la respuesta. Con `modified_since`, la tienda no recibe ninguna señal de esa baja. Mientras tanto, la tienda puede recorrer cada cierto tiempo el catálogo completo sin `modified_since`, siguiendo `next` hasta el final, y retirar los productos que no vinieron en ninguna página. Desde el tramo C una sola llamada trae solo la primera página: retirar lo que no vino en ella borraría productos que siguen a la venta.
 - Un movimiento de inventario no cambia la fecha de modificación del producto, así que `modified_since` no trae los productos cuya cantidad cambió. Para actualizar cantidades hay que consultar sin `modified_since`, o con `in_stock`.
 - Si el servidor tiene varias bases sin filtro, sin sesión responde 404 y no 303 (ver [Errores](#errores)).
 - ~~El catálogo sale completo en una sola respuesta, sin paginación.~~ Resuelto en el tramo C (ver [Paginación](#paginación)).
@@ -510,10 +538,15 @@ Todos con fecha de modificación 2026-10-01 00:00:00 UTC.
 
 ### Preguntas al cliente
 
-1. El stock no se reserva hasta que un vendedor confirma la cotización, así que la última unidad podría venderse dos veces. ¿Es aceptable, o la tienda debe descontarla de su propio inventario, o las cotizaciones deben reservar stock?
-2. Los productos sin referencia interna no se pueden pedir (el POST pide el código). ¿Hay productos vendibles sin referencia que la tienda necesite pedir?
-3. ¿Cuánto tiempo se guarda el log de llamadas, y quién lo depura?
-4. ¿Quién revisa las cotizaciones de la tienda y confirma el pago?
+Sobre lo que necesita la tienda:
+
+1. ¿Cuánto tiempo se guarda el log de llamadas, y quién lo depura?
+2. ¿Quién revisa las cotizaciones de la tienda y confirma el pago?
+
+Que salen de cómo funciona Odoo:
+
+3. El stock no se reserva hasta que un vendedor confirma la cotización, así que la última unidad podría venderse dos veces. ¿Es aceptable, o la tienda debe descontarla de su propio inventario, o las cotizaciones deben reservar stock?
+4. Los productos sin referencia interna no se pueden pedir (el POST pide el código). ¿Hay productos vendibles sin referencia que la tienda necesite pedir?
 
 ## Cómo se verificó (tramo B)
 
@@ -540,12 +573,15 @@ Todos con fecha de modificación 2026-10-01 00:00:00 UTC.
 - **Las claves son de cada usuario de la API y no vencen.** Si la tienda repite una clave meses después con el mismo contenido, recibe el pedido viejo; con otro contenido, un 409.
 - **Solo avisan los pedidos creados por la API.** El POST los marca (campo `shop_api_order`). Los pedidos creados en Odoo, o por la API antes de instalar el tramo C, no avisan.
 - **Avisa cada entrega validada, también las parciales**, con lo que salió en ella. Con entregas en varios pasos (recoger, empaquetar, enviar) avisa solo el paso de salida al cliente (tipo de operación «Entrega»). Las devoluciones y las cancelaciones no avisan.
-- **`fully_delivered`** compara lo entregado con lo pedido en las líneas que salen del almacén, en la unidad de cada línea.
+- **`fully_delivered` es `true` cuando ya no queda nada por entregar**: el pedido no tiene entregas al cliente sin validar ni cancelar. También es `true` cuando lo que falta se cancela, por ejemplo al validar una entrega parcial sin crear entrega pendiente: así la tienda sabe que no llegará otro aviso. Cuánto llegó lo dicen las líneas de los avisos (ver [Cómo seguir un pedido con los avisos](#cómo-seguir-un-pedido-con-los-avisos)).
 - **La configuración va en Ajustes generales**, en un bloque «Tienda en línea», y solo la ven los administradores.
 
 ### Limitaciones conocidas
 
-- La paginación es por posición (`page`): si se crea o se archiva un producto mientras la tienda recorre las páginas, un producto puede saltarse o salir dos veces. La tienda puede recorrer de nuevo el catálogo de vez en cuando, como ya se recomienda para las bajas.
+- La paginación es por posición (`page`): si el conjunto cambia mientras la tienda recorre las páginas (se crea o se archiva un producto, o con `in_stock=true` uno se queda sin stock), un producto puede saltarse o salir dos veces. La tienda puede recorrer de nuevo el catálogo de vez en cuando, como ya se recomienda para las bajas. Paginar por id («los productos con id mayor que el último recibido») lo evitaría (pregunta 7).
+- El aviso no dice cuándo saldrá lo que queda pendiente, y cancelar en Odoo una entrega pendiente sin validar nada no avisa (preguntas 4 y 5).
+- Los avisos de un mismo pedido pueden llegar desordenados si uno falla y se reintenta; la tienda compara `delivery.date_done`.
+- La firma cubre el cuerpo, no una marca de tiempo: quien capture un aviso puede reenviarlo tal cual. La tienda lo descarta por su `event_id` repetido.
 - Los avisos y las claves de idempotencia no se depuran solos, igual que el log.
 - Si la URL o el secreto no estaban configurados cuando se validó una entrega, ese aviso no se crea después.
 - El envío depende de las tareas programadas de Odoo: con un servidor sin hilos para ellas (`max_cron_threads = 0`), los avisos se quedan pendientes.
@@ -553,22 +589,43 @@ Todos con fecha de modificación 2026-10-01 00:00:00 UTC.
 
 ### Preguntas a la tienda
 
+Sobre lo que necesita la tienda:
+
 1. ¿A qué URL debe llegar el aviso de entrega, y pueden verificar la firma HMAC-SHA256 con un secreto compartido? ¿Cómo prefieren recibir ese secreto?
 2. ¿Qué tamaño de página les sirve? Hoy son 100 productos por defecto y 500 como máximo.
 3. ¿Mandarán `Idempotency-Key` en cada pedido? Sin ella, un reintento tras un corte de red puede duplicar el pedido.
-4. ¿Necesitan avisos de otros cambios del pedido (confirmación, cancelación, devolución)?
+4. ¿Necesitan avisos de otros cambios del pedido (confirmación, cancelación, devolución)? Hoy solo se avisa cuando se valida una entrega.
+
+Que salen de cómo funciona Odoo:
+
+5. ¿Necesitan mostrarle al cliente cuándo llegará lo que quedó pendiente? Odoo podría mandar esa fecha, pero solo sirve si alguien en el almacén la mantiene al día: hoy la entrega pendiente hereda la fecha de la entrega original.
+6. ¿Quién le avisa al cliente de cada entrega: la tienda, con estos avisos, o el correo que Odoo puede mandar al validarla? Si avisan los dos, el cliente recibe dos mensajes.
+7. ¿Les sirve paginar por número de página, o prefieren paginar por id? Con páginas, un producto que se queda sin stock mientras la tienda recorre el catálogo con `in_stock=true` puede hacer que se salte otro.
 
 ## Cómo se verificó (tramo C)
 
-- Las pruebas se escribieron antes que el código, en commits `[TEST]` separados, para cada parte: paginación, `Idempotency-Key` y aviso.
-- **Pendiente: correr las pruebas en una base nueva de Odoo 18** (`./odoo test -i prueba-tecnica -d <base_nueva> -m shop_integration_api`) y la prueba a mano de abajo. Hasta entonces no hay resultado de pruebas del tramo C.
-- Lo que sí se verificó sin Odoo: que todo el Python compila; `ruff` (reglas F y E9) sin avisos salvo los `import` de los `__init__.py`, que son normales en Odoo; que los XML están bien formados; que `openapi.yaml` es OpenAPI 3.1 válido (`openapi-spec-validator`), y que sus ejemplos y el contenido del aviso que arman las pruebas cumplen sus esquemas (`jsonschema`). No se corrió el linter de Odoo (`pylint_odoo`).
+- Las pruebas se escribieron antes que el código, en commits `[TEST]` separados, para cada parte: paginación, `Idempotency-Key` y aviso. Cada commit de pruebas, corrido en una base nueva con el código anterior, falló por la razón esperada:
+  - Paginación: `14 failed, 1 error(s) of 63 tests` (`page_size` era un parámetro desconocido y la respuesta no traía `page`).
+  - `Idempotency-Key`: `9 failed, 4 error(s) of 74 tests` (el reintento creaba otro pedido, faltaba `Idempotent-Replayed` y no existía el modelo de claves).
+  - Aviso: el archivo de pruebas no cargaba porque el modelo del aviso no existía.
+- La primera corrida con todo el código dio `1 failed, 1 error(s) of 86 tests`: dos pruebas mal escritas (ver el AI_LOG). Se corrigieron, y la revisión de código encontró casos que daban 500 o dejaban errores en el registro; sus pruebas nuevas fallaron antes de la corrección (`7 failed, 0 error(s) of 87 tests`). También fallaron antes de su corrección las pruebas de `fully_delivered` con lo que falta cancelado (`1 failed, 0 error(s) of 89 tests`).
+- Mutaciones: se rompieron a propósito el cálculo de stock (producto por producto), la comparación del contenido de `Idempotency-Key`, el filtro de devoluciones, el envío en segundo plano y la página inicial. Cada una hizo fallar las pruebas que la cubren; la del stock, por ejemplo, subió las consultas de 43 a 232 con 30 productos. Después se restauró el código.
+- Pruebas en una base nueva de Odoo 18 (`./odoo test -i prueba-tecnica -d <base_nueva> -m shop_integration_api`): `0 failed, 0 error(s) of 89 tests`. Los cuatro módulos juntos: `0 failed, 0 error(s) of 209 tests`.
+- Linter del repositorio (`.pylintrc` y `.pylintrc-mandatory`): solo marca que el autor del manifest no es la OCA, igual que en los otros módulos.
+- `openapi.yaml` es OpenAPI 3.1 válido (`openapi-spec-validator`).
+- Prueba a mano, en una base local actualizada desde el tramo A (`sia_navegador`), con los pasos de abajo. La recorrió la IA con un navegador automatizado (Playwright) y se revisó con capturas de cada paso, por pedido de Eduardo:
+  - Ajustes: el bloque «Tienda en línea» guarda la URL y el secreto.
+  - GET: con `page_size=2` trae `"total": 6` y `next`; la página 3 trae `"next": null`.
+  - `Idempotency-Key`: dos POST iguales devuelven el mismo pedido (`S00001`), el segundo con `Idempotent-Replayed: true`. Con otra cantidad, 409 `IDEMPOTENCY_KEY_REUSED`. En Ventas hay una sola cotización.
+  - Entrega parcial sin entrega pendiente: 8 de 10 Escritorios, validados sin crear entrega pendiente. El aviso sale en el primer intento, con `fully_delivered: true`, y el receptor confirma la firma.
+  - Entrega parcial con entrega pendiente y la tienda caída: 4 de 6 Estantes. La validación no espera. El aviso queda pendiente con el error y el próximo intento a un minuto. Con el receptor encendido sale en el segundo intento, con `fully_delivered: false`.
+  - «Reintentar»: un aviso fallido vuelve a la cola y se envía.
 
 ### Pasos de prueba a mano
 
 1. Actualizar el módulo (`-u shop_integration_api`); el tramo C agrega la dependencia `sale_stock`.
-2. GET: `curl -s -H "Authorization: Bearer <clave>" "http://localhost:8069/api/v1/products?page_size=2"` debe traer `total`, `page`, `page_size`, `count` y `next`; seguir `next` hasta que sea `null`.
-3. `Idempotency-Key`: mandar dos veces el POST de [Reintentos sin duplicar](#reintentos-sin-duplicar-idempotency-key) con la misma clave. Las dos respuestas deben traer el mismo `id`, la segunda con `Idempotent-Replayed: true`, y en **Ventas → Cotizaciones** debe haber un solo pedido. Cambiar la cantidad y repetir con la misma clave: 409.
+2. GET: `curl -s -H "Authorization: Bearer <clave>" "http://localhost:8069/api/v1/products?page_size=2"` debe traer `total`, `page`, `page_size`, `count` y `next`; seguir `next` hasta que sea `null`. Con varias bases en el servidor, agregar la cookie de la base (ver [Varias bases de datos](#varias-bases-de-datos)).
+3. `Idempotency-Key`: mandar dos veces el POST de [Reintentos sin duplicar](#reintentos-sin-duplicar-idempotency-key) con la misma clave. Las dos respuestas deben traer el mismo `id`, la segunda con `Idempotent-Replayed: true`, y en **Ventas → Cotizaciones** debe haber un solo pedido. Esa lista abre con el filtro «Mis cotizaciones», y el vendedor de los pedidos de la API es el usuario de la tienda: para verlos hay que quitar el filtro. Cambiar la cantidad y repetir con la misma clave: 409.
 4. Aviso: levantar un receptor que responda 200 y sea alcanzable desde donde corre Odoo (si Odoo está en Docker, desde el contenedor). Por ejemplo, este, que además verifica la firma:
 
    ```python

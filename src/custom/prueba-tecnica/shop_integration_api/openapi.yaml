@@ -239,12 +239,17 @@ webhooks:
         administrador puede reintentarlo. Las redirecciones no se siguen: un 3xx cuenta como fallo.
 
         La entrega es «al menos una vez»: la tienda puede recibir el mismo aviso más de una vez y debe
-        ignorar los `X-Shop-Event-Id` que ya procesó.
+        ignorar los `event_id` del cuerpo que ya procesó. Se usa el del cuerpo, que va firmado, después
+        de verificar la firma; la cabecera `X-Shop-Event-Id` trae el mismo valor pero no va firmada.
+
+        El orden no está garantizado: un aviso que falló sale en su reintento, y para entonces puede
+        haber llegado otro más nuevo del mismo pedido. Para saber cuál es el último, se compara
+        `delivery.date_done`.
       parameters:
         - name: X-Shop-Event-Id
           in: header
           required: true
-          description: Id único del aviso (UUID). Igual al `event_id` del cuerpo y el mismo en cada reintento.
+          description: Id único del aviso (UUID). Igual al `event_id` del cuerpo y el mismo en cada reintento. No va firmado.
           schema:
             type: string
             format: uuid
@@ -440,7 +445,7 @@ components:
         event_id:
           type: string
           format: uuid
-          description: Igual a la cabecera `X-Shop-Event-Id`.
+          description: Igual a la cabecera `X-Shop-Event-Id`. Va firmado con el cuerpo, así que es el que se usa para descartar avisos repetidos.
         order:
           type: object
           required: [id, name, external_ref]
@@ -483,7 +488,11 @@ components:
                     description: Cantidad entregada, en la unidad del pedido.
         fully_delivered:
           type: boolean
-          description: '`true` si con esta entrega el pedido quedó entregado por completo (los servicios no cuentan).'
+          description: >-
+            `true` si con esta entrega ya no queda nada por entregar del pedido: lo que faltaba se entregó
+            o se canceló (por ejemplo, al validar una entrega parcial sin crear entrega pendiente). No
+            quiere decir que llegó todo lo pedido: para eso se suman las `delivery.lines` de los avisos
+            del pedido. Los servicios no cuentan.
   responses:
     Unauthorized:
       description: '`UNAUTHORIZED`: sin credenciales, con otro esquema o con una clave inválida, vencida o de un usuario archivado.'
