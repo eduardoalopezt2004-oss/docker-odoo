@@ -172,6 +172,21 @@ class TestDeliveryWebhook(TransactionCase):
         self._deliver(order.picking_ids, 10)
         self.assertFalse(self._events(order))
 
+    def test_returns_do_not_notify(self):
+        """Solo avisan las entregas al cliente: la devolución de un pedido de la API no."""
+        order = self._order()
+        delivery = order.picking_ids
+        self._deliver(delivery, 10)
+        wizard = self.env["stock.return.picking"].create({"picking_id": delivery.id})
+        wizard.product_return_moves.quantity = 10
+        return_picking = self.env["stock.picking"].browse(wizard.action_create_returns()["res_id"])
+        self.assertEqual(return_picking.picking_type_code, "incoming")
+        # La devolución queda en el mismo pedido de la API: lo único que la frena es el tipo de operación.
+        self.assertEqual(return_picking.sale_id, order)
+        self._deliver(return_picking, 10)
+        self.assertEqual(return_picking.state, "done")
+        self.assertEqual(self._events(order).picking_id, delivery, "Solo el aviso de la entrega")
+
     def test_without_url_nothing_is_queued(self):
         self.env["ir.config_parameter"].sudo().set_param("shop_integration_api.webhook_url", False)
         order = self._order()
