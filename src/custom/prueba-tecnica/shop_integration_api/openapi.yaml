@@ -1,0 +1,534 @@
+openapi: 3.1.0
+info:
+  title: API de productos y pedidos para la tienda en línea
+  version: 18.0.1.2.0
+  description: |
+    Catálogo de productos y pedidos de la tienda en línea en Odoo 18 (módulo `shop_integration_api`).
+
+    Todos los errores en JSON tienen la forma `{"error": {"code", "field", "message"}}`. La tienda decide
+    qué hacer según `code`; `message` es para una persona y puede cambiar de redacción.
+
+    El README del módulo explica cada regla con ejemplos; este archivo es el contrato en formato máquina.
+servers:
+  - url: https://{servidor}
+    variables:
+      servidor:
+        default: odoo.example.com
+        description: Servidor de Odoo del cliente.
+security:
+  - bearerAuth: []
+tags:
+  - name: Productos
+  - name: Pedidos
+paths:
+  /api/v1/products:
+    get:
+      tags: [Productos]
+      operationId: listProducts
+      summary: Productos activos que se pueden vender, paginados
+      description: |
+        Cada variante es un producto. La lista va ordenada por `id`. Siempre se pagina: sin `page` ni
+        `page_size` se devuelve la primera página de 100 productos. Para recorrer el catálogo, seguir
+        `next` hasta que sea `null`; `next` conserva los filtros de la consulta.
+
+        No se aceptan otros parámetros ni el mismo parámetro dos veces (400 `INVALID_PARAMETER`).
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+      parameters:
+        - name: category_id
+          in: query
+          description: Id de la categoría. Incluye sus subcategorías.
+          schema:
+            type: string
+            pattern: '^[1-9][0-9]*$'
+          example: '7'
+        - name: in_stock
+          in: query
+          description: '`true`: solo productos con cantidad libre mayor que cero. `false`: igual que no mandarlo.'
+          schema:
+            type: string
+            enum: ['true', 'false']
+        - name: modified_since
+          in: query
+          description: |
+            Productos cuyo código, nombre o precio pudo cambiar desde esa fecha (UTC). Una fecha sola
+            cuenta desde las 00:00:00 UTC. La `Z` final es opcional.
+          schema:
+            type: string
+            pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}(T[0-9]{2}:[0-9]{2}:[0-9]{2}Z?)?$'
+          examples:
+            fecha:
+              value: '2026-10-01'
+            fechaYHora:
+              value: '2026-10-19T14:30:00Z'
+        - name: page
+          in: query
+          description: Número de página, desde 1. Una página después de la última responde 200 con la lista vacía.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 2147483647
+            default: 1
+        - name: page_size
+          in: query
+          description: Productos por página.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 100
+      responses:
+        '200':
+          description: Una página de productos (puede venir vacía).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductPage'
+              example:
+                total: 3
+                page: 1
+                page_size: 2
+                count: 2
+                next: /api/v1/products?in_stock=true&page=2&page_size=2
+                products:
+                  - {id: 11, code: TIENDA-001, name: Escritorio, price: 150.0, quantity: 8.0}
+                  - {id: 12, code: TIENDA-002, name: Silla, price: 40.0, quantity: 3.0}
+        '400':
+          description: '`INVALID_PARAMETER`: un parámetro inválido, desconocido o repetido, o una categoría que no existe.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: INVALID_PARAMETER
+                  field: page_size
+                  message: 'page_size debe ser un número entero de 1 a 500: 1000'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/v1/orders:
+    post:
+      tags: [Pedidos]
+      operationId: createOrder
+      summary: Crea una cotización a partir del RIF del cliente y los códigos de producto
+      description: |
+        El pedido queda como cotización (`state: draft`). Precios, impuestos y lista de precios los
+        calcula Odoo. Solo acepta la clave Bearer, no la cookie de sesión.
+
+        Con `Idempotency-Key`, repetir la misma llamada (por ejemplo, tras un corte de red) devuelve el
+        mismo pedido en lugar de crear otro.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          description: |
+            Opcional. Una clave por pedido, generada por la tienda (por ejemplo, un UUID). Es de cada
+            usuario de la API y no vence.
+
+            - Misma clave y mismo contenido: 201 con el mismo pedido y la cabecera `Idempotent-Replayed: true`.
+              El contenido se compara como JSON, sin importar el orden de los campos ni los espacios.
+            - Misma clave y otro contenido: 409 `IDEMPOTENCY_KEY_REUSED`.
+            - Misma clave mientras la primera petición no termina: 409 `IDEMPOTENCY_KEY_IN_USE`.
+            - Una respuesta 4xx o 500 no gasta la clave: se puede corregir y reintentar con la misma.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 255
+            pattern: '^[\x20-\x7E]+$'
+          example: 3f0c8e2a-4b7d-4c1e-9a55-1d2e3f4a5b6c
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrderRequest'
+            example:
+              customer_rif: J-12345678-9
+              external_ref: WEB-1001
+              lines:
+                - {default_code: TIENDA-001, quantity: 2}
+                - {default_code: TIENDA-002, quantity: 1.5}
+      responses:
+        '201':
+          description: Cotización creada, o la misma cotización si se repitió la `Idempotency-Key` con el mismo contenido.
+          headers:
+            Idempotent-Replayed:
+              description: '`true` cuando la respuesta repite un pedido ya creado con esa `Idempotency-Key`. No viene en un pedido nuevo.'
+              schema:
+                type: string
+                enum: ['true']
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+              example:
+                id: 42
+                name: S00042
+                state: draft
+                external_ref: WEB-1001
+                customer_id: 7
+                amount_untaxed: 300.0
+                amount_total: 348.0
+                currency: USD
+        '400':
+          description: '`INVALID_JSON` (el cuerpo no es un objeto JSON) o `INVALID_IDEMPOTENCY_KEY` (la cabecera está vacía, es muy larga o trae caracteres no ASCII o de control).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: INVALID_IDEMPOTENCY_KEY
+                  field: Idempotency-Key
+                  message: Idempotency-Key debe tener de 1 a 255 caracteres ASCII visibles.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '409':
+          description: '`IDEMPOTENCY_KEY_REUSED` (la clave ya se usó con otro contenido) o `IDEMPOTENCY_KEY_IN_USE` (otra petición con esta clave no terminó; reintentar en unos segundos).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: IDEMPOTENCY_KEY_REUSED
+                  field: Idempotency-Key
+                  message: Esta Idempotency-Key ya se usó con otro contenido. Use una clave nueva para otro pedido.
+        '422':
+          description: |
+            Un dato del cuerpo con problema; `field` es su ruta exacta (`lines[1].quantity`). Códigos:
+            `REQUIRED_FIELD`, `INVALID_FIELD`, `INVALID_QUANTITY`, `CUSTOMER_NOT_FOUND`,
+            `PRODUCT_NOT_FOUND` y `AMBIGUOUS_REFERENCE`. Un 422 repetido con el mismo cuerpo da siempre
+            el mismo resultado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: PRODUCT_NOT_FOUND
+                  field: lines[1].default_code
+                  message: No existe un producto con el código ABC-123
+        '500':
+          $ref: '#/components/responses/InternalError'
+webhooks:
+  orderDelivered:
+    post:
+      summary: Aviso de Odoo a la tienda al validar una entrega
+      description: |
+        Odoo lo manda a la URL configurada en Ajustes (bloque «Tienda en línea») cada vez que se valida
+        una entrega de un pedido creado por `POST /api/v1/orders`. Una entrega parcial avisa con lo que
+        salió en ella; la siguiente entrega del mismo pedido manda otro aviso.
+
+        El envío es en segundo plano: quien valida la entrega no espera a la tienda. Cualquier respuesta
+        que no sea 2xx (o ninguna respuesta en 10 segundos) se reintenta a los 1, 5, 15 y 60 minutos y
+        luego cada 6 horas, en total unas 25 horas. Después el aviso queda como fallido en Odoo, donde un
+        administrador puede reintentarlo. Las redirecciones no se siguen: un 3xx cuenta como fallo.
+
+        La entrega es «al menos una vez»: la tienda puede recibir el mismo aviso más de una vez y debe
+        ignorar los `event_id` del cuerpo que ya procesó. Se usa el del cuerpo, que va firmado, después
+        de verificar la firma; la cabecera `X-Shop-Event-Id` trae el mismo valor pero no va firmada.
+
+        El orden no está garantizado: un aviso que falló sale en su reintento, y para entonces puede
+        haber llegado otro más nuevo del mismo pedido. Para saber cuál es el último, se compara
+        `delivery.date_done`.
+      parameters:
+        - name: X-Shop-Event-Id
+          in: header
+          required: true
+          description: Id único del aviso (UUID). Igual al `event_id` del cuerpo y el mismo en cada reintento. No va firmado.
+          schema:
+            type: string
+            format: uuid
+        - name: X-Shop-Signature
+          in: header
+          required: true
+          description: |
+            `sha256=` seguido del HMAC-SHA256 en hexadecimal del cuerpo tal como llega (bytes), con el
+            secreto configurado en Odoo como clave. La tienda calcula el mismo HMAC, lo compara en
+            tiempo constante y rechaza el aviso si no coincide.
+          schema:
+            type: string
+            pattern: '^sha256=[0-9a-f]{64}$'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeliveryEvent'
+            example:
+              event: order.delivered
+              event_id: 0b6c1f4e-3d2a-4f5b-8c7d-9e0f1a2b3c4d
+              order: {id: 42, name: S00042, external_ref: WEB-1001}
+              delivery:
+                name: WH/OUT/00007
+                date_done: '2026-10-20T14:03:00Z'
+                lines:
+                  - {product_id: 11, default_code: TIENDA-001, quantity: 2.0}
+              fully_delivered: false
+      responses:
+        '200':
+          description: Cualquier 2xx confirma el aviso; Odoo no lee el cuerpo de la respuesta.
+        default:
+          description: Cualquier otra respuesta hace que Odoo reintente según el calendario.
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Clave de API de Odoo del usuario de la tienda (Preferencias → Seguridad de la cuenta → Nueva clave de API).
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: session_id
+      description: Cookie de sesión de `POST /web/session/authenticate`. Solo sirve en el GET de productos.
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      additionalProperties: false
+      properties:
+        error:
+          type: object
+          required: [code, field, message]
+          additionalProperties: false
+          properties:
+            code:
+              type: string
+              description: Código fijo en mayúsculas; es el que la tienda usa para decidir.
+              enum:
+                - INVALID_PARAMETER
+                - INVALID_JSON
+                - INVALID_IDEMPOTENCY_KEY
+                - UNAUTHORIZED
+                - FORBIDDEN
+                - METHOD_NOT_ALLOWED
+                - IDEMPOTENCY_KEY_REUSED
+                - IDEMPOTENCY_KEY_IN_USE
+                - REQUIRED_FIELD
+                - INVALID_FIELD
+                - INVALID_QUANTITY
+                - CUSTOMER_NOT_FOUND
+                - PRODUCT_NOT_FOUND
+                - AMBIGUOUS_REFERENCE
+                - INTERNAL_ERROR
+            field:
+              type: [string, 'null']
+              description: Parámetro, cabecera o ruta del dato con el problema; `null` si no es de un dato.
+            message:
+              type: string
+              description: Explicación en español para una persona.
+    Product:
+      type: object
+      required: [id, code, name, price, quantity]
+      additionalProperties: false
+      properties:
+        id:
+          type: integer
+          description: Id de la variante (`product.product`). Identificador estable del producto.
+        code:
+          type: [string, 'null']
+          description: Referencia interna; `null` si no tiene. Es el `default_code` del POST.
+        name:
+          type: string
+          description: Nombre con los valores de atributo de la variante, en el idioma del usuario de la API.
+        price:
+          type: number
+          description: Precio de venta más el extra de la variante, sin impuestos ni listas de precios, en la moneda de la compañía.
+        quantity:
+          type: number
+          description: Cantidad libre (a mano menos reservado). Servicios y productos sin inventario dan 0.
+    ProductPage:
+      type: object
+      required: [total, page, page_size, count, next, products]
+      additionalProperties: false
+      properties:
+        total:
+          type: integer
+          description: Productos que cumplen los filtros, en todas las páginas.
+        page:
+          type: integer
+          description: Página de esta respuesta.
+        page_size:
+          type: integer
+          description: Productos por página usados en esta respuesta.
+        count:
+          type: integer
+          description: Productos en esta respuesta.
+        next:
+          type: [string, 'null']
+          description: Ruta (con los mismos filtros) de la página siguiente; `null` en la última.
+        products:
+          type: array
+          items:
+            $ref: '#/components/schemas/Product'
+    OrderLineRequest:
+      type: object
+      required: [default_code, quantity]
+      additionalProperties: false
+      properties:
+        default_code:
+          type: string
+          minLength: 1
+          description: Referencia interna exacta del producto (el `code` del GET).
+        quantity:
+          type: number
+          exclusiveMinimum: 0
+          description: Cantidad en la unidad de venta del producto; admite decimales. Un texto o un booleano no sirven.
+    OrderRequest:
+      type: object
+      required: [customer_rif, external_ref, lines]
+      additionalProperties: false
+      properties:
+        customer_rif:
+          type: string
+          description: |
+            Una letra (V, E, J, P, G o C) y 9 dígitos. Admite guiones, puntos y espacios y da igual
+            mayúscula o minúscula. No se valida el dígito verificador.
+          example: J-12345678-9
+        external_ref:
+          type: string
+          minLength: 1
+          description: Referencia del pedido en la tienda; se guarda como «Referencia del cliente».
+        lines:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/OrderLineRequest'
+    Order:
+      type: object
+      required: [id, name, state, external_ref, customer_id, amount_untaxed, amount_total, currency]
+      additionalProperties: false
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+          description: Número de la cotización.
+        state:
+          type: string
+          description: '`draft` al crearla. Al repetir una `Idempotency-Key` es el estado actual del pedido.'
+          enum: [draft, sent, sale, cancel]
+        external_ref:
+          type: string
+        customer_id:
+          type: integer
+          description: Id del cliente (la empresa) en Odoo.
+        amount_untaxed:
+          type: number
+        amount_total:
+          type: number
+        currency:
+          type: string
+          description: Código ISO de la moneda del pedido.
+    DeliveryEvent:
+      type: object
+      required: [event, event_id, order, delivery, fully_delivered]
+      additionalProperties: false
+      properties:
+        event:
+          type: string
+          const: order.delivered
+        event_id:
+          type: string
+          format: uuid
+          description: Igual a la cabecera `X-Shop-Event-Id`. Va firmado con el cuerpo, así que es el que se usa para descartar avisos repetidos.
+        order:
+          type: object
+          required: [id, name, external_ref]
+          additionalProperties: false
+          properties:
+            id:
+              type: integer
+              description: El `id` que devolvió `POST /api/v1/orders`.
+            name:
+              type: string
+            external_ref:
+              type: [string, 'null']
+              description: La `external_ref` que mandó la tienda.
+        delivery:
+          type: object
+          required: [name, date_done, lines]
+          additionalProperties: false
+          properties:
+            name:
+              type: string
+              description: Número de la entrega en Odoo.
+            date_done:
+              type: string
+              format: date-time
+              description: Fecha y hora de la validación, en UTC.
+            lines:
+              type: array
+              description: Lo que salió en esta entrega (no lo acumulado del pedido).
+              items:
+                type: object
+                required: [product_id, default_code, quantity]
+                additionalProperties: false
+                properties:
+                  product_id:
+                    type: integer
+                  default_code:
+                    type: [string, 'null']
+                  quantity:
+                    type: number
+                    description: Cantidad entregada, en la unidad del pedido.
+        fully_delivered:
+          type: boolean
+          description: >-
+            `true` si con esta entrega ya no queda nada por entregar del pedido: lo que faltaba se entregó
+            o se canceló (por ejemplo, al validar una entrega parcial sin crear entrega pendiente). No
+            quiere decir que llegó todo lo pedido: para eso se suman las `delivery.lines` de los avisos
+            del pedido. Los servicios no cuentan.
+  responses:
+    Unauthorized:
+      description: '`UNAUTHORIZED`: sin credenciales, con otro esquema o con una clave inválida, vencida o de un usuario archivado.'
+      headers:
+        WWW-Authenticate:
+          schema:
+            type: string
+            const: Bearer
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: UNAUTHORIZED
+              field: null
+              message: 'Credenciales ausentes o inválidas. Mande la clave en la cabecera Authorization: Bearer.'
+    Forbidden:
+      description: '`FORBIDDEN`: el usuario no es interno (por ejemplo, del portal) o le falta un permiso.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    MethodNotAllowed:
+      description: '`METHOD_NOT_ALLOWED`: otro método HTTP. La cabecera `Allow` dice cuál usar.'
+      headers:
+        Allow:
+          schema:
+            type: string
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    InternalError:
+      description: '`INTERNAL_ERROR`: error inesperado del servidor, sin detalles. Lo escrito se deshace; se puede reintentar más tarde.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'

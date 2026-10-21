@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="shop_webhook_event_view_list" model="ir.ui.view">
+        <field name="name">shop.webhook.event.list</field>
+        <field name="model">shop.webhook.event</field>
+        <field name="arch" type="xml">
+            <list create="0" edit="0" delete="0" decoration-danger="state == 'failed'" decoration-muted="state == 'sent'">
+                <field name="create_date" string="Creado"/>
+                <field name="order_id"/>
+                <field name="picking_id"/>
+                <field name="event_type"/>
+                <field name="state"/>
+                <field name="attempts"/>
+                <field name="next_attempt" invisible="state != 'pending'"/>
+                <field name="last_status"/>
+                <field name="last_error"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="shop_webhook_event_view_form" model="ir.ui.view">
+        <field name="name">shop.webhook.event.form</field>
+        <field name="model">shop.webhook.event</field>
+        <field name="arch" type="xml">
+            <form create="0" edit="0" delete="0">
+                <header>
+                    <button name="action_retry" type="object" string="Reintentar" class="btn-primary"
+                            invisible="state != 'failed'"/>
+                    <field name="state" widget="statusbar"/>
+                </header>
+                <sheet>
+                    <group>
+                        <group>
+                            <field name="event_uuid"/>
+                            <field name="event_type"/>
+                            <field name="order_id"/>
+                            <field name="picking_id"/>
+                        </group>
+                        <group>
+                            <field name="attempts"/>
+                            <field name="next_attempt" invisible="state != 'pending'"/>
+                            <field name="last_attempt"/>
+                            <field name="last_status"/>
+                            <field name="last_error"/>
+                        </group>
+                    </group>
+                    <field name="payload"/>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="shop_webhook_event_view_search" model="ir.ui.view">
+        <field name="name">shop.webhook.event.search</field>
+        <field name="model">shop.webhook.event</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="order_id"/>
+                <field name="picking_id"/>
+                <field name="event_uuid"/>
+                <filter string="Pendientes" name="pending" domain="[('state', '=', 'pending')]"/>
+                <filter string="Fallidos" name="failed" domain="[('state', '=', 'failed')]"/>
+                <filter string="Enviados" name="sent" domain="[('state', '=', 'sent')]"/>
+                <group expand="0" string="Agrupar por">
+                    <filter string="Estado" name="group_state" context="{'group_by': 'state'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="shop_webhook_event_action" model="ir.actions.act_window">
+        <field name="name">Avisos a la tienda</field>
+        <field name="res_model">shop.webhook.event</field>
+        <field name="view_mode">list,form</field>
+    </record>
+
+    <menuitem id="shop_webhook_event_menu"
+              name="Avisos a la tienda"
+              parent="base.menu_custom"
+              action="shop_webhook_event_action"
+              groups="base.group_system"
+              sequence="51"/>
+</odoo>

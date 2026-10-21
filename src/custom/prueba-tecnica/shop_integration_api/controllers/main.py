@@ -1,27 +1,38 @@
+import hashlib
 import json
 import logging
 import math
 import re
 import time
 from datetime import datetime
+from urllib.parse import urlencode
+
+from psycopg2.errors import UniqueViolation
 
 from odoo import Command, http
 from odoo.exceptions import AccessError
 from odoo.http import request
-from odoo.tools import float_is_zero
+from odoo.tools import float_is_zero, mute_logger
 
 _logger = logging.getLogger(__name__)
 
-ALLOWED_PARAMS = ("category_id", "in_stock", "modified_since")
+ALLOWED_PARAMS = ("category_id", "in_stock", "modified_since", "page", "page_size")
+PAGE_PARAMS = ("page", "page_size")
+DEFAULT_PAGE_SIZE = 100
+MAX_PAGE_SIZE = 500
 # Mayor valor de una columna integer de PostgreSQL: un id más grande haría
 # fallar la consulta con un error de base de datos.
 MAX_ID = 2147483647
 ID_RE = re.compile(r"[1-9][0-9]*")
+# Python no convierte a int un texto de más de 4300 dígitos: se mira el largo antes.
+MAX_ID_DIGITS = len(str(MAX_ID))
 # RIF: una letra y 9 dígitos, ya sin guiones, puntos ni espacios y en mayúscula.
 RIF_RE = re.compile(r"[VEJPGC][0-9]{9}")
 RIF_SEPARATORS_RE = re.compile(r"[-. ]")
 ORDER_FIELDS = ("customer_rif", "external_ref", "lines")
 LINE_FIELDS = ("default_code", "quantity")
+# Idempotency-Key: de 1 a 255 caracteres ASCII visibles (espacio incluido, sin tabuladores).
+IDEMPOTENCY_KEY_RE = re.compile(r"[\x20-\x7e]{1,255}")
 DATE_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}(T[0-9]{2}:[0-9]{2}:[0-9]{2}Z?)?")
 
 
@@ -151,9 +162,13 @@ class ShopIntegrationController(http.Controller):
 
     def _products(self):
         env = request.env
-        domain = self._products_domain(request.httprequest.args)
+        args = request.httprequest.args
+        domain = self._products_domain(args)
+        page, page_size = self._parse_page(args)
         # Los productos se buscan con los permisos del usuario de la API.
-        products = env["product.product"].with_context(display_default_code=False).search(domain, order="id")
+        Product = env["product.product"].with_context(display_default_code=False)
+        total = Product.search_count(domain)
+        products = Product.search(domain, order="id", offset=(page - 1) * page_size, limit=page_size)
         # sudo() solo para calcular free_qty de estos productos: el cálculo lee
         # stock.move, que pide el grupo Inventario / Usuario, y la API solo
         # devuelve el número. Las compañías siguen siendo las del usuario.
@@ -168,13 +183,59 @@ class ShopIntegrationController(http.Controller):
             }
             for product in products
         ]
-        return request.make_json_response({"count": len(result), "products": result})
+        next_url = None
+        if page * page_size < total:
+            # La página siguiente conserva los filtros de esta.
+            params = [(name, value) for name, value in args.items(multi=True) if name not in PAGE_PARAMS]
+            params += [("page", page + 1), ("page_size", page_size)]
+            next_url = "/api/v1/products?" + urlencode(params)
+        return request.make_json_response(
+            {
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+                "count": len(result),
+                "next": next_url,
+                "products": result,
+            }
+        )
+
+    def _parse_page(self, args):
+        """Página (desde 1) y productos por página (de 1 a MAX_PAGE_SIZE) de la consulta."""
+        env = request.env
+        page = self._parse_positive_int(args, "page", 1, MAX_ID, env._("page debe ser un número entero desde 1: %s"))
+        page_size = self._parse_positive_int(
+            args,
+            "page_size",
+            DEFAULT_PAGE_SIZE,
+            MAX_PAGE_SIZE,
+            env._("page_size debe ser un número entero de 1 a %(max)s: %%s", max=MAX_PAGE_SIZE),
+        )
+        return page, page_size
+
+    def _parse_positive_int(self, args, name, default, maximum, message):
+        if name not in args:
+            return default
+        value = args[name]
+        if not self._is_positive_int(value, maximum):
+            raise InvalidParameter(name, message % value)
+        return int(value)
+
+    def _is_positive_int(self, value, maximum):
+        return bool(ID_RE.fullmatch(value)) and len(value) <= MAX_ID_DIGITS and int(value) <= maximum
 
     def _create_order(self):
         env = request.env
         if not env["sale.order"].has_access("create"):
             raise ApiError(403, "FORBIDDEN", env._("Este usuario no tiene permiso para crear pedidos."))
-        rif, external_ref, lines = self._parse_order(self._json_body())
+        idempotency_key = self._idempotency_key()
+        body = self._json_body()
+        rif, external_ref, lines = self._parse_order(body)
+        key_record = None
+        if idempotency_key:
+            existing_order, key_record = self._reserve_idempotency_key(idempotency_key, body)
+            if existing_order:
+                return self._order_response(existing_order, replayed=True)
         partner = self._find_customer(rif)
         products = self._find_products([code for code, _qty in lines])
         order_lines = []
@@ -188,7 +249,11 @@ class ShopIntegrationController(http.Controller):
                 raise ApiError(
                     422,
                     "INVALID_QUANTITY",
-                    env._("La cantidad %s queda en 0 en la unidad de venta del producto %s.", quantity, code),
+                    env._(
+                        "La cantidad %(quantity)s queda en 0 en la unidad de venta del producto %(code)s.",
+                        quantity=quantity,
+                        code=code,
+                    ),
                     f"lines[{index}].quantity",
                 )
             order_lines.append(Command.create({"product_id": product.id, "product_uom_qty": quantity}))
@@ -200,12 +265,76 @@ class ShopIntegrationController(http.Controller):
                 "partner_id": partner.id,
                 "user_id": env.uid,
                 "client_order_ref": external_ref,
+                # Marca el pedido para avisar a la tienda cuando se valide su entrega.
+                "shop_api_order": True,
                 "order_line": order_lines,
             }
         )
+        if key_record:
+            key_record.order_id = order
         return self._order_response(order)
 
-    def _order_response(self, order):
+    def _idempotency_key(self):
+        """Valor de la cabecera Idempotency-Key, o None si no viene (es opcional)."""
+        value = request.httprequest.headers.get("Idempotency-Key")
+        if value is None:
+            return None
+        value = value.strip()
+        if not IDEMPOTENCY_KEY_RE.fullmatch(value):
+            raise ApiError(
+                400,
+                "INVALID_IDEMPOTENCY_KEY",
+                request.env._("Idempotency-Key debe tener de 1 a 255 caracteres ASCII visibles."),
+                "Idempotency-Key",
+            )
+        return value
+
+    def _reserve_idempotency_key(self, key, body):
+        """Busca o reserva la clave de este usuario.
+
+        :return: (pedido ya creado con esta clave y el mismo contenido, o None;
+            registro de la clave reservada para el pedido nuevo, o None)
+        :raises ApiError: 409 si la clave ya se usó con otro contenido o la usa otra petición en curso
+        """
+        env = request.env
+        # Mismo contenido aunque cambien el orden de los campos o los espacios.
+        canonical = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        request_hash = hashlib.sha256(canonical.encode()).hexdigest()
+        # sudo() solo para las claves de este usuario: quien llama a la API no lee ni escribe
+        # ese modelo, igual que el log.
+        Keys = env["shop.idempotency.key"].sudo()
+        existing = Keys.search([("user_id", "=", env.uid), ("key", "=", key)], limit=1)
+        if existing and existing.request_hash != request_hash:
+            raise ApiError(
+                409,
+                "IDEMPOTENCY_KEY_REUSED",
+                env._("Esta Idempotency-Key ya se usó con otro contenido. Use una clave nueva para otro pedido."),
+                "Idempotency-Key",
+            )
+        if existing:
+            # La clave y su pedido se guardan en la misma transacción: otra petición nunca ve una
+            # clave sin pedido.
+            return existing.order_id, None
+        try:
+            # Dos peticiones a la vez con la misma clave: la segunda espera en el índice único hasta
+            # que la primera termina y recibe la violación. Es un caso esperado: mute_logger evita
+            # que Odoo lo registre como un error de consulta.
+            with env.cr.savepoint(), mute_logger("odoo.sql_db"):
+                record = Keys.create({"user_id": env.uid, "key": key, "request_hash": request_hash})
+        except UniqueViolation:
+            raise ApiError(
+                409,
+                "IDEMPOTENCY_KEY_IN_USE",
+                env._("Hay otra petición con esta Idempotency-Key que todavía no terminó. Reintente en unos segundos."),
+                "Idempotency-Key",
+            ) from None
+        return None, record
+
+    def _order_response(self, order, replayed=False):
+        # sudo() al repetir una respuesta: el pedido lo creó este usuario, pero quien revisa la
+        # cotización puede haberle cambiado el vendedor, y la respuesta debe ser la misma.
+        order = order.sudo() if replayed else order
+        headers = [("Idempotent-Replayed", "true")] if replayed else None
         return request.make_json_response(
             {
                 "id": order.id,
@@ -217,6 +346,7 @@ class ShopIntegrationController(http.Controller):
                 "amount_total": order.amount_total,
                 "currency": order.currency_id.name,
             },
+            headers=headers,
             status=201,
         )
 
@@ -227,6 +357,14 @@ class ShopIntegrationController(http.Controller):
             raise ApiError(400, "INVALID_JSON", request.env._("El cuerpo no es un JSON válido.")) from exc
         if not isinstance(body, dict):
             raise ApiError(400, "INVALID_JSON", request.env._("El cuerpo debe ser un objeto JSON."))
+        try:
+            # json acepta sustitutos sueltos (\ud800), que no son texto Unicode: guardarlos o
+            # devolverlos en un mensaje fallaría al pasarlos a UTF-8.
+            json.dumps(body, ensure_ascii=False).encode()
+        except UnicodeEncodeError as exc:
+            raise ApiError(
+                400, "INVALID_JSON", request.env._("El cuerpo tiene caracteres que no son texto Unicode válido.")
+            ) from exc
         return body
 
     def _parse_order(self, body):
@@ -266,7 +404,11 @@ class ShopIntegrationController(http.Controller):
             if name not in allowed:
                 raise self._invalid_field(
                     f"{prefix}{name}",
-                    request.env._("Campo desconocido: %s%s. Los admitidos son %s.", prefix, name, ", ".join(allowed)),
+                    request.env._(
+                        "Campo desconocido: %(field)s. Los admitidos son %(allowed)s.",
+                        field=f"{prefix}{name}",
+                        allowed=", ".join(allowed),
+                    ),
                 )
 
     def _required_text(self, data, name, path):
@@ -363,7 +505,7 @@ class ShopIntegrationController(http.Controller):
                 raise InvalidParameter(
                     name,
                     env._(
-                        "Parámetro desconocido: %s. Los admitidos son category_id, in_stock y modified_since.",
+                        "Parámetro desconocido: %s. Los admitidos son category_id, in_stock, modified_since, page y page_size.",
                         name,
                     ),
                 )
@@ -396,7 +538,7 @@ class ShopIntegrationController(http.Controller):
 
     def _parse_category(self, value):
         env = request.env
-        if not ID_RE.fullmatch(value) or int(value) > MAX_ID:
+        if not self._is_positive_int(value, MAX_ID):
             raise InvalidParameter(
                 "category_id",
                 env._("category_id debe ser un número entero positivo (el id de la categoría): %s", value),

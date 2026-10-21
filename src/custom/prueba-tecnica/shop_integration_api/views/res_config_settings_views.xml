@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="res_config_settings_view_form" model="ir.ui.view">
+        <field name="name">res.config.settings.view.form.inherit.shop_integration_api</field>
+        <field name="model">res.config.settings</field>
+        <field name="inherit_id" ref="base_setup.res_config_settings_view_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//app[@name='general_settings']" position="inside">
+                <block title="Tienda en línea" name="shop_integration_api_setting_container">
+                    <setting id="shop_webhook_setting" string="Aviso de entrega a la tienda"
+                             help="Al validar una entrega de un pedido creado por la API, Odoo avisa a esta URL en segundo plano. Sin URL y secreto no se envía ningún aviso.">
+                        <div class="content-group">
+                            <div class="row mt16">
+                                <label for="shop_webhook_url" string="URL" class="col-lg-3 o_light_label"/>
+                                <field name="shop_webhook_url" placeholder="https://tienda.example.com/odoo/avisos"/>
+                            </div>
+                            <div class="row">
+                                <label for="shop_webhook_secret" string="Secreto" class="col-lg-3 o_light_label"/>
+                                <field name="shop_webhook_secret" password="True"/>
+                            </div>
+                        </div>
+                    </setting>
+                </block>
+            </xpath>
+        </field>
+    </record>
+</odoo>

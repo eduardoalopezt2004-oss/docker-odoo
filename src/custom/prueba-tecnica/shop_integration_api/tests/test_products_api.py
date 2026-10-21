@@ -87,7 +87,8 @@ class TestProductsApi(HttpCase):
     def _ids(self, query=""):
         """Ids devueltos que pertenecen a los productos de esta prueba
         (la base puede traer productos de demostración)."""
-        response = self._get(query)
+        # Página grande: desde el tramo C la respuesta va paginada (100 por defecto).
+        response = self._get(f"{query}{'&' if query else '?'}page_size=500")
         self.assertEqual(response.status_code, 200, response.text)
         return {p["id"] for p in response.json()["products"]} & set(self.ours.ids)
 
@@ -113,7 +114,7 @@ class TestProductsApi(HttpCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.headers["Content-Type"], "application/json; charset=utf-8")
         body = response.json()
-        self.assertEqual(set(body), {"count", "products"})
+        self.assertEqual(set(body), {"total", "page", "page_size", "count", "next", "products"})
         self.assertEqual(body["count"], len(body["products"]))
         ids = [p["id"] for p in body["products"]]
         self.assertEqual(ids, sorted(ids), "La lista va ordenada por id")
@@ -136,7 +137,8 @@ class TestProductsApi(HttpCase):
         self.assertEqual(self._ids(f"?category_id={self.categ_child.id}"), {self.p_child.id})
 
     def test_filter_in_stock(self):
-        response = self._get("?in_stock=true")
+        # Página grande: los productos de la prueba son los últimos por id.
+        response = self._get("?in_stock=true&page_size=500")
         self.assertEqual(response.status_code, 200, response.text)
         products = response.json()["products"]
         self.assertTrue(all(p["quantity"] > 0 for p in products))
@@ -158,7 +160,9 @@ class TestProductsApi(HttpCase):
         # Fecha futura: lista vacía, no error.
         response = self._get("?modified_since=2099-01-01")
         self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual(response.json(), {"count": 0, "products": []})
+        self.assertEqual(
+            response.json(), {"total": 0, "page": 1, "page_size": 100, "count": 0, "next": None, "products": []}
+        )
 
     def test_filter_modified_since_variant_attributes(self):
         """El precio extra y el nombre del valor de atributo cambian lo que devuelve
@@ -199,7 +203,7 @@ class TestProductsApi(HttpCase):
         self.env.invalidate_all()
 
         def changed_variants():
-            response = self._get("?modified_since=2025-01-01")
+            response = self._get("?modified_since=2025-01-01&page_size=500")
             self.assertEqual(response.status_code, 200, response.text)
             return {p["id"]: p for p in response.json()["products"] if p["id"] in template.product_variant_ids.ids}
 
@@ -252,7 +256,8 @@ class TestProductsApi(HttpCase):
 
     def test_invalid_category(self):
         missing = self.env["product.category"].search([], order="id desc", limit=1).id + 1000
-        for value in ["abc", "0", "-1", "1.5", "", "99999999999", str(missing)]:
+        # "1" * 5000: Python no convierte a int textos de más de 4300 dígitos; no debe dar 500.
+        for value in ["abc", "0", "-1", "1.5", "", "99999999999", "1" * 5000, str(missing)]:
             with self.subTest(value=value):
                 self._assert_invalid(f"?category_id={value}", "category_id")
 
