@@ -53,12 +53,13 @@ class TestDeliveryWebhook(TransactionCase):
         order.action_confirm()
         return order
 
-    def _deliver(self, picking, quantity, user=None):
+    def _deliver(self, picking, quantity, user=None, cancel_backorder=False):
         picking.action_assign()
         for move in picking.move_ids:
             move.quantity = quantity
             move.picked = True
-        picking.with_user(user or self.env.user)._action_done()
+        # cancel_backorder=True: validar una entrega parcial sin crear entrega pendiente (lo que falta se cancela).
+        picking.with_user(user or self.env.user).with_context(cancel_backorder=cancel_backorder)._action_done()
 
     def _events(self, order):
         return self.env["shop.webhook.event"].search([("order_id", "=", order.id)], order="id")
@@ -166,6 +167,17 @@ class TestDeliveryWebhook(TransactionCase):
         self.assertFalse(first["fully_delivered"])
         self.assertEqual(second["delivery"]["lines"][0]["quantity"], 4.0)
         self.assertTrue(second["fully_delivered"])
+
+    def test_partial_delivery_without_backorder_has_nothing_left_to_deliver(self):
+        """6 de 10 sin entrega pendiente: las 4 se cancelan y no llegará otro aviso, así que
+        fully_delivered es true (ya no queda nada por entregar). Lo entregado va en las líneas."""
+        order = self._order(quantity=10)
+        delivery = order.picking_ids
+        self._deliver(delivery, 6, cancel_backorder=True)
+        self.assertEqual(order.picking_ids, delivery, "Sin entrega pendiente")
+        payload = json.loads(self._events(order).payload)
+        self.assertEqual(payload["delivery"]["lines"][0]["quantity"], 6.0)
+        self.assertTrue(payload["fully_delivered"])
 
     def test_only_orders_created_by_the_api_notify(self):
         order = self._order(api=False, ref="NO-API")
