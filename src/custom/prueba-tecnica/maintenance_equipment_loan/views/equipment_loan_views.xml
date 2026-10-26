@@ -4,7 +4,8 @@
         <field name="name">equipment.loan.list</field>
         <field name="model">equipment.loan</field>
         <field name="arch" type="xml">
-            <list decoration-muted="state in ('returned', 'cancelled')">
+            <list decoration-muted="state in ('returned', 'cancelled')" decoration-danger="is_overdue">
+                <field name="is_overdue" column_invisible="True"/>
                 <field name="equipment_id"/>
                 <field name="user_id" widget="many2one_avatar_user"/>
                 <field name="date_delivery"/>
@@ -33,6 +34,9 @@
                     <field name="state" widget="statusbar" statusbar_visible="draft,loaned,returned"/>
                 </header>
                 <sheet>
+                    <field name="is_overdue" invisible="1"/>
+                    <widget name="web_ribbon" title="Vencido" bg_color="text-bg-danger"
+                            invisible="not is_overdue"/>
                     <group>
                         <group>
                             <field name="equipment_id" readonly="state != 'draft'"/>
@@ -59,6 +63,8 @@
                 <filter name="filter_draft" string="Borrador" domain="[('state', '=', 'draft')]"/>
                 <filter name="filter_loaned" string="Prestados" domain="[('state', '=', 'loaned')]"/>
                 <filter name="filter_returned" string="Devueltos" domain="[('state', '=', 'returned')]"/>
+                <separator/>
+                <filter name="filter_overdue" string="Vencidos" domain="[('is_overdue', '=', True)]"/>
             </search>
         </field>
     </record>
